@@ -131,12 +131,12 @@ GPU 0 [NVIDIA GeForce RTX 5060 Ti]: free 13284 MiB / 16311 MiB (259 MiB reserved
 $ hmn --json                              # same data, scriptable
 [{"index":0,"name":"NVIDIA GeForce RTX 5060 Ti","total_bytes":17103323136,"free_bytes":14967820288,"used_bytes":2135502848,"reserved_bytes":271581184,"driver_version":"610.88"}]
 
-$ hmn ps                                  # who's holding it? (top rows shown)
-PID    NAME                 VRAM     SHARED  DEVICE
-30136  QmlRenderer.exe      1.8 GiB  50 MiB  NVIDIA GeForce RTX 5060 Ti
-3524   firefox.exe          866 MiB  25 MiB  NVIDIA GeForce RTX 5060 Ti
-17020  Discord.exe          401 MiB  5 MiB   NVIDIA GeForce RTX 5060 Ti
-13196  Code.exe             335 MiB  6 MiB   NVIDIA GeForce RTX 5060 Ti
+$ hmn ps                                  # who's holding it? (top rows shown; SPILL since v0.2.11)
+PID    NAME                         VRAM     SHARED  DEVICE                      SPILL
+26796  firefox.exe                  1.5 GiB  10 MiB  NVIDIA GeForce RTX 5060 Ti  no
+29092  dwm.exe                      1.2 GiB  3 MiB   NVIDIA GeForce RTX 5060 Ti  no
+21324  SamsungMagician.exe          268 MiB  0 MiB   NVIDIA GeForce RTX 5060 Ti  no
+9584   claude.exe                   242 MiB  0 MiB   NVIDIA GeForce RTX 5060 Ti  no
 ...
 
 $ hmn spill -- .\spillforge.exe           # is this run spilling? (the release-validation
@@ -235,9 +235,9 @@ GPU 1 [Intel Iris Xe Graphics]: free 32768 MiB / 32768 MiB
 `hmn ps` (illustrative — empty on machines with no active CUDA workload):
 
 ```
-PID    NAME              VRAM      SHARED   DEVICE
-12345  lm-studio.exe     8.2 GiB   45 MiB   NVIDIA GeForce RTX 5060 Ti
-67890  python.exe        1.4 GiB   0 MiB    NVIDIA GeForce RTX 5060 Ti
+PID    NAME              VRAM      SHARED   DEVICE                      SPILL
+12345  lm-studio.exe     8.2 GiB   45 MiB   NVIDIA GeForce RTX 5060 Ti  no
+67890  python.exe        1.4 GiB   0 MiB    NVIDIA GeForce RTX 5060 Ti  no
 ```
 
 A one-line summary is written to **stderr** after each `hmn ps` run:
@@ -259,28 +259,30 @@ The stderr summary is always printed, even when the table is empty, so interacti
 
 3. **The SHARED column (Windows / `PDH` only) shows *resident* shared-system-memory bytes — the `WDDM` spill signal.** Matches Task Manager's `Shared GPU memory` column for the same PID. A benign baseline (staging/upload heaps, tens of MiB) is normal by design; the spill signature is this number *growing* while dedicated `VRAM` saturates — which is exactly what `hmn spill` and the library's `SpillTracker` detect. Always `0` on Linux and macOS (no shared-residency counter exists there).
 
-4. **(Windows) `?` in the NAME column is now rare.** Before v0.2.8, any PID `OpenProcess` couldn't resolve — including plenty of ordinary foreign-user/`SYSTEM` processes like `dwm.exe` and `csrss.exe` — rendered as a bare `?`. As of v0.2.8, a `Toolhelp32Snapshot` fallback resolves those the same way `Get-Process`/Task Manager do (a system-wide process enumeration that reads names without opening a per-process handle, so it isn't subject to the same access check `OpenProcess` is), collapsing the vast majority of former `?` rows to real names non-elevated:
+4. **The SPILL column (since v0.2.11) is a single-snapshot approximation, not `hmn watch`'s temporal verdict.** `hmn ps` has no history to measure shared-memory *growth* against, so `SPILL`/`no` here means "adapter dedicated commit at or above the 85% threshold AND adapter shared-resident at or above 256 MiB right now" — an absolute floor, not growth above a baseline. `?` (not `no`) means spill isn't measurable at all (non-Windows, pre-`WDDM 2.0`, a non-NVIDIA adapter, or a `PDH` hiccup) — the `--json` field is `true`/`false`/`null` to match, never collapsing "can't tell" into `false`. Reach for `hmn watch`/`hmn spill` when the growth-over-baseline distinction actually matters.
+
+5. **(Windows) `?` in the NAME column is now rare.** Before v0.2.8, any PID `OpenProcess` couldn't resolve — including plenty of ordinary foreign-user/`SYSTEM` processes like `dwm.exe` and `csrss.exe` — rendered as a bare `?`. As of v0.2.8, a `Toolhelp32Snapshot` fallback resolves those the same way `Get-Process`/Task Manager do (a system-wide process enumeration that reads names without opening a per-process handle, so it isn't subject to the same access check `OpenProcess` is), collapsing the vast majority of former `?` rows to real names non-elevated:
 
    ```
-   PID    NAME                         VRAM      SHARED  DEVICE
-   26940  dwm.exe                      1001 MiB  4 MiB   NVIDIA GeForce RTX 5060 Ti
-   18880  csrss.exe                    39 MiB    63 MiB  NVIDIA GeForce RTX 5060 Ti
-   4      [kernel]                     4 MiB     0 MiB   NVIDIA GeForce RTX 5060 Ti
+   PID    NAME                         VRAM     SHARED  DEVICE                      SPILL
+   29092  dwm.exe                      1.2 GiB  2 MiB   NVIDIA GeForce RTX 5060 Ti  no
+   19100  csrss.exe                    74 MiB   31 MiB  NVIDIA GeForce RTX 5060 Ti  no
+   4      [kernel]                     4 MiB    0 MiB   NVIDIA GeForce RTX 5060 Ti  no
    ```
 
-   *(real capture, non-elevated shell — both rows rendered `?` before v0.2.8)*
+   *(real capture, non-elevated shell, v0.2.11 — both `dwm.exe`/`csrss.exe` rows rendered `?` before v0.2.8; SPILL added this release)*
 
    What remains genuinely unresolvable now renders as one of two honest brackets instead of an anonymous `?`: **`[exited]`** — the process exited between `hypomnesis`'s VRAM sample and the name lookup; elevation would not help, this is a timing race, not a permission wall. **`[protected]`** — the `Toolhelp32Snapshot` fallback itself could not be taken (very rare — resource exhaustion), so "exited" vs. "still running but unresolvable" can't be told apart. The Windows kernel itself (`PID 4`) continues to render as `[kernel]`, not `?` or `[protected]` — there is no executable image to read, so it's special-cased. This `[exited]`/`[protected]` distinction is Windows-only; Linux/macOS unresolved rows remain a bare `?` in the table (`name: None` underneath), since there is no equivalent false-wall-vs-real-wall gap to collapse there — see the [FAQ](docs/FAQ.md#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation) for the platform breakdown.
 
-   *Security note.* A `[protected]` row (or a bare `?` on Linux/macOS) that does not resolve under elevation is one of: a process owned by another user, a process running as `SYSTEM` / `LOCAL SERVICE` / `NETWORK SERVICE`, a `PPL`-protected process, or (rarely, post-v0.2.8) the snapshot API itself failing. None of these are intrinsically malicious — but on a single-user desktop, an *unexpected* unresolved row holding substantial VRAM is worth investigating: a malicious local process (including a privileged-or-cross-user AI agent) using GPU resources would land in exactly this set. The `(N protected — re-run elevated for names)` parenthetical on the `hmn ps` summary line is intentionally surfaced because this distinction is security-relevant, and (as of v0.2.8) counts `[protected]`/`None` rows and the rare pre-`WDDM 2.0` `nvidia-smi` fallback's literal `?` name (limitation 5, below) — not `[exited]`, since elevation can't help a process that's already gone. `hypomnesis` is a measurement tool, not a malware scanner — but its honesty about the gap is itself a defensive primitive.
+   *Security note.* A `[protected]` row (or a bare `?` on Linux/macOS) that does not resolve under elevation is one of: a process owned by another user, a process running as `SYSTEM` / `LOCAL SERVICE` / `NETWORK SERVICE`, a `PPL`-protected process, or (rarely, post-v0.2.8) the snapshot API itself failing. None of these are intrinsically malicious — but on a single-user desktop, an *unexpected* unresolved row holding substantial VRAM is worth investigating: a malicious local process (including a privileged-or-cross-user AI agent) using GPU resources would land in exactly this set. The `(N protected — re-run elevated for names)` parenthetical on the `hmn ps` summary line is intentionally surfaced because this distinction is security-relevant, and (as of v0.2.8) counts `[protected]`/`None` rows and the rare pre-`WDDM 2.0` `nvidia-smi` fallback's literal `?` name (limitation 6, below) — not `[exited]`, since elevation can't help a process that's already gone. `hypomnesis` is a measurement tool, not a malware scanner — but its honesty about the gap is itself a defensive primitive.
 
-5. **Pre-`WDDM 2.0` Windows falls back to `nvidia-smi --query-compute-apps`.** Vanishingly rare in 2026 — `WDDM 2.0` shipped with Windows 10 1709 (October 2017). On the fallback path, `hmn ps` is compute-only (matching the Linux semantic) and `used_memory` may be `[N/A]` under `WDDM` (parser drops those rows). The `source` field on `GpuProcessEntry` reads `GpuQuerySource::NvidiaSmi` rather than `GpuQuerySource::Pdh` on this path.
+6. **Pre-`WDDM 2.0` Windows falls back to `nvidia-smi --query-compute-apps`.** Vanishingly rare in 2026 — `WDDM 2.0` shipped with Windows 10 1709 (October 2017). On the fallback path, `hmn ps` is compute-only (matching the Linux semantic) and `used_memory` may be `[N/A]` under `WDDM` (parser drops those rows). The `source` field on `GpuProcessEntry` reads `GpuQuerySource::NvidiaSmi` rather than `GpuQuerySource::Pdh` on this path.
 
-6. **`R570`-class driver-bug filtering.** The `u64::MAX` sentinel (`R570` driver bug on `RTX 5060 Ti` and similar consumer GeForce cards) and the `used > total` corruption checks are applied per-row in `hmn ps`; affected rows are dropped rather than reported as garbage.
+7. **`R570`-class driver-bug filtering.** The `u64::MAX` sentinel (`R570` driver bug on `RTX 5060 Ti` and similar consumer GeForce cards) and the `used > total` corruption checks are applied per-row in `hmn ps`; affected rows are dropped rather than reported as garbage.
 
-7. **macOS `used_bytes` reflects currently-resident GPU pages.** The kernel evicts idle Metal pages from a process's `graphics_footprint`, so the same PID may report different values across successive `hmn ps` calls when its working set has cooled. This is the same resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS` — not a macOS quirk, the cross-platform contract.
+8. **macOS `used_bytes` reflects currently-resident GPU pages.** The kernel evicts idle Metal pages from a process's `graphics_footprint`, so the same PID may report different values across successive `hmn ps` calls when its working set has cooled. This is the same resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS` — not a macOS quirk, the cross-platform contract.
 
-8. **macOS cross-user PIDs are silently skipped.** The per-PID `ledger` syscall returns `EPERM` for processes owned by another user. `hmn ps` enumerates same-user PIDs only by default; run elevated (`sudo hmn ps`) to include cross-user PIDs such as `WindowServer`, `kernel_task`, and other-user-owned applications.
+9. **macOS cross-user PIDs are silently skipped.** The per-PID `ledger` syscall returns `EPERM` for processes owned by another user. `hmn ps` enumerates same-user PIDs only by default; run elevated (`sudo hmn ps`) to include cross-user PIDs such as `WindowServer`, `kernel_task`, and other-user-owned applications.
 
 ### `hmn spill` — WDDM spill detection
 

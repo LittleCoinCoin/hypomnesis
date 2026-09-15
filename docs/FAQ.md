@@ -10,6 +10,7 @@ the authoritative source (README limitation, rustdoc, or per-release roadmap).
 - [What do the `hmn ps --sort <KEY>` keys mean, and which should I use?](#what-do-the-hmn-ps---sort-key-keys-mean-and-which-should-i-use)
 - [Why is the SHARED column nonzero when nothing is wrong?](#why-is-the-shared-column-nonzero-when-nothing-is-wrong)
 - [How does hypomnesis decide a run is spilling?](#how-does-hypomnesis-decide-a-run-is-spilling)
+- [Why is the `hmn ps` SPILL column sometimes `null`, and how does it differ from `hmn watch`?](#why-is-the-hmn-ps-spill-column-sometimes-null-and-how-does-it-differ-from-hmn-watch)
 - [Why is the saturation threshold 85% and not 95% (or 100%)?](#why-is-the-saturation-threshold-85-and-not-95-or-100)
 - [Why is everything spill-related 0 / `false` on Linux and macOS?](#why-is-everything-spill-related-0--false-on-linux-and-macos)
 - [What does a `?` in the NAME column mean — and when do I need elevation?](#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation)
@@ -148,6 +149,23 @@ saturation. Each contiguous spilling stretch becomes one **episode** in the
 the batch size"; *one sustained episode* reads as "genuinely over, rethink
 model / precision". Both figures are measured **residency** (`PDH`
 `\GPU Adapter Memory(*)` gauges), never commit.
+
+## Why is the `hmn ps` SPILL column sometimes `null`, and how does it differ from `hmn watch`?
+
+`hmn ps` is a single snapshot — it has no time series, so it cannot check "has shared-resident
+*grown* above its baseline" the way the co-condition above does. Its SPILL column (`spilling` in
+`--json`, since v0.2.11) instead applies the same two thresholds with the growth check replaced
+by an absolute floor: adapter dedicated-resident ≥ 85% of capacity **and** adapter
+shared-resident ≥ 256 MiB, evaluated once per device from one live sample and broadcast to every
+row on that device (the same "same value on every row" shape `hmn watch`'s own `spilling` field
+already uses). **This is not equivalent to `hmn watch`'s verdict for the same instant** — a
+workload whose own baseline shared usage already sits above 256 MiB (an unusually large staging
+heap) reads `SPILL` here and correctly `no` there once its baseline is subtracted. `null`
+(`?` in the text table) means spill isn't measurable at all — non-Windows, pre-`WDDM 2.0`, a
+non-NVIDIA adapter, or a `PDH` hiccup — and is never collapsed into `false`/`no`, so a script
+checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". Reach for
+`hmn watch`/`hmn spill` when the growth-over-baseline distinction actually matters — `hmn ps` is
+for "is anything spilling right now, at a glance", not the authoritative temporal verdict.
 
 ## Why is the saturation threshold 85% and not 95% (or 100%)?
 

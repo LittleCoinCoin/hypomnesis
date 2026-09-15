@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Driven by a candle-mi dogfooding report
+([2026-09-14](docs/dogfooding-feedbacks/dogfooding-orphan-attribution-and-ps-spill-flag.md))
+that field-validated v0.2.7 `watch --follow-new` (36 sequential processes, clean) and diagnosed
+an 8× GPU slowdown via `hmn ps`'s SHARED column — two orphaned test binaries holding 8.6 GiB
+plus the real job spilling 6.8 GiB into shared memory — but had to infer "spilling" by eye
+because only `hmn watch` carried a spill signal. Four small, additive asks, in the report's own
+priority order.
+
+### Added
+
+- **`hmn ps` gains a SPILL column / `spilling` JSON field** (`src/spill.rs`, `src/bin/hmn.rs`) —
+  a new library function, `hypomnesis::snapshot_is_spilling(device_index) -> Option<bool>`,
+  takes one live adapter-wide `PDH` sample (the same source `hmn spill`/`hmn watch` already use)
+  and applies a *single-snapshot* approximation of the v0.2.5 spill co-condition: adapter
+  dedicated commit at or above the existing 85% threshold AND adapter shared-resident at or
+  above the existing 256 MiB floor — an absolute floor rather than growth above a baseline,
+  since a one-shot `ps` listing has no history to measure growth against. **Not equivalent** to
+  `hmn watch`'s verdict for the same instant (see the function's rustdoc and the new `hmn --help`
+  Limitations bullet). Computed once per device and broadcast to every row on it, matching
+  `hmn watch`'s existing "same value on every row" shape. `ps --json` rows gain `"spilling":
+  true|false|null` — `null`, never `false`, when spill isn't measurable here (non-Windows,
+  pre-`WDDM 2.0`, a non-NVIDIA adapter, or a `PDH` hiccup), matching the crate's existing
+  `measurable` honesty pattern (`SpillReport`, `is_spill_measurable()`). The text table gains a
+  `SPILL` column: `SPILL` / `no` / `?` (the `?` — not `no` — for the unmeasurable case).
+
 ## [0.2.10] - 2026-08-17
 
 > *Audited, not assumed.*

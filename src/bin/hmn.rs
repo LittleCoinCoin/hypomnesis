@@ -45,7 +45,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand, ValueEnum};
 use hypomnesis::{
     GpuProcessEntry, Result, Snapshot, SpillEpisode, SpillReport, SpillTracker, device_count,
-    device_info, gpu_processes,
+    device_info, gpu_processes, snapshot_is_spilling,
 };
 
 /// `hmn` CLI: device summary plus GPU-process listing.
@@ -90,6 +90,15 @@ use hypomnesis::{
                   column. A benign baseline (staging/upload heaps) is normal; growth while \
                   dedicated VRAM saturates is spill. Always 0 on Linux and macOS (no \
                   shared-residency counter exists there).\n\
+                  - The SPILL column (`hmn ps`, since v0.2.11) is a *single-snapshot* \
+                  approximation of `hmn watch`'s spill co-condition: adapter dedicated commit at \
+                  or above the 85% threshold AND adapter shared-resident at or above 256 MiB — \
+                  an absolute floor, not growth above a baseline, because a one-shot listing has \
+                  no history to measure growth against. Not equivalent to `hmn watch`'s verdict \
+                  for the same instant. `?` (not `no`) means spill isn't measurable here \
+                  (non-Windows, pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup) — never \
+                  rendered as `no`, so it can't be misread as \"measured, not spilling\". Use \
+                  `hmn watch`/`hmn spill` when the growth-over-baseline distinction matters.\n\
                   - On Windows, `?` in the NAME column is now rare (since v0.2.8): a \
                   `CreateToolhelp32Snapshot` fallback (the same mechanism `Get-Process`/Task \
                   Manager use) resolves most PIDs `OpenProcess` can't, including ordinary \
@@ -172,7 +181,11 @@ enum Commands {
         /// `name` (string or null), `used_bytes` (number),
         /// `shared_used_bytes` (number — resident shared bytes, the
         /// WDDM spill signal; 0 off-Windows), `device_index` (number),
-        /// `device_name` (string or null). Row order follows `--sort`.
+        /// `device_name` (string or null), `spilling` (true, false, or
+        /// null — a single-snapshot approximation of the `hmn watch`
+        /// spill co-condition, broadcast per device; null means "not
+        /// measurable here", never collapsed into false). Row order
+        /// follows `--sort`.
         #[arg(long)]
         json: bool,
     },
@@ -502,6 +515,14 @@ struct PsRow {
     /// Friendly device name (e.g. `RTX 5060 Ti`); `None` when
     /// `device_info` failed for this index.
     device_name: Option<String>,
+    /// One-shot spill check ([`hypomnesis::snapshot_is_spilling`]) for
+    /// this row's device, computed once per device and broadcast to
+    /// every row on it — same "adapter-wide, same value on every row"
+    /// shape `hmn watch`'s `spilling` field already uses. `None` when
+    /// not measurable (non-Windows, pre-`WDDM 2.0`, non-NVIDIA adapter,
+    /// or a live `PDH` sample failure) — never collapsed into
+    /// `Some(false)`.
+    spilling: Option<bool>,
 }
 
 /// Display-order key for `hmn ps --sort` (and, always pinned to
@@ -587,6 +608,12 @@ fn run_ps(
         // Failure here is non-fatal: row's `device_name` falls back to
         // None and the formatter renders `GPU N` instead.
         let device_name = device_info(idx).ok().and_then(|d| d.name);
+        // One live spill sample per device (not per row): `snapshot_is_spilling`
+        // is adapter-wide, so every row on this device gets the same
+        // value — the same "broadcast" shape `hmn watch`'s `spilling`
+        // field already uses. `None` (not measurable) on non-Windows,
+        // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup.
+        let spilling = snapshot_is_spilling(idx);
         let Ok(entries) = gpu_processes(idx) else {
             continue;
         };
@@ -605,6 +632,7 @@ fn run_ps(
                 // BORROW: clone — device_name is shared across all
                 // rows for this device.
                 device_name: device_name.clone(),
+                spilling,
             });
         }
     }
@@ -754,6 +782,7 @@ fn format_ps_table(rows: &[PsRow]) -> String {
     let vram_header = "VRAM";
     let shared_header = "SHARED";
     let device_header = "DEVICE";
+    let spill_header = "SPILL";
 
     let pid_cells: Vec<String> = rows.iter().map(|r| r.pid.to_string()).collect();
     let name_cells: Vec<&str> = rows
@@ -773,28 +802,41 @@ fn format_ps_table(rows: &[PsRow]) -> String {
                 .unwrap_or_else(|| format!("GPU {}", r.device_index))
         })
         .collect();
+    // "?" (not "no") for `None` — the same "can't tell" convention used
+    // elsewhere for unresolved process names, so an operator never
+    // mistakes "not measurable here" for "measured, not spilling".
+    let spill_cells: Vec<&str> = rows
+        .iter()
+        .map(|r| match r.spilling {
+            Some(true) => "SPILL",
+            Some(false) => "no",
+            None => "?",
+        })
+        .collect();
 
     let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
     let name_w = column_width(name_header, name_cells.iter().copied());
     let vram_w = column_width(vram_header, vram_cells.iter().map(String::as_str));
     let shared_w = column_width(shared_header, shared_cells.iter().map(String::as_str));
     let device_w = column_width(device_header, device_cells.iter().map(String::as_str));
+    let spill_w = column_width(spill_header, spill_cells.iter().copied());
 
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{pid_header:<pid_w$}  {name_header:<name_w$}  {vram_header:<vram_w$}  {shared_header:<shared_w$}  {device_header:<device_w$}",
+        "{pid_header:<pid_w$}  {name_header:<name_w$}  {vram_header:<vram_w$}  {shared_header:<shared_w$}  {device_header:<device_w$}  {spill_header:<spill_w$}",
     );
-    for ((((pid, name), vram), shared), device) in pid_cells
+    for (((((pid, name), vram), shared), device), spill) in pid_cells
         .iter()
         .zip(&name_cells)
         .zip(&vram_cells)
         .zip(&shared_cells)
         .zip(&device_cells)
+        .zip(&spill_cells)
     {
         let _ = writeln!(
             out,
-            "{pid:<pid_w$}  {name:<name_w$}  {vram:<vram_w$}  {shared:<shared_w$}  {device:<device_w$}",
+            "{pid:<pid_w$}  {name:<name_w$}  {vram:<vram_w$}  {shared:<shared_w$}  {device:<device_w$}  {spill:<spill_w$}",
         );
     }
     out
@@ -802,8 +844,10 @@ fn format_ps_table(rows: &[PsRow]) -> String {
 
 /// Format `ps` rows as a JSON array, one object per row. Hand-rolled
 /// (no `serde` dep — keeps the `cli` feature lean for v0.2). Each
-/// object: `{"pid":N,"name":<string|null>,"used_bytes":N,"shared_used_bytes":N,"device_index":N,"device_name":<string|null>}`.
-/// String values are JSON-escaped via [`json_escape`].
+/// object: `{"pid":N,"name":<string|null>,"used_bytes":N,"shared_used_bytes":N,"device_index":N,"device_name":<string|null>,"spilling":<true|false|null>}`.
+/// `spilling` is `null`, never `false`, when spill isn't measurable
+/// here — see [`PsRow::spilling`]'s doc. String values are
+/// JSON-escaped via [`json_escape`].
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_ps_json(rows: &[PsRow]) -> String {
     let mut out = String::from("[");
@@ -819,9 +863,14 @@ fn format_ps_json(rows: &[PsRow]) -> String {
             || String::from("null"),
             |n| format!("\"{}\"", json_escape(n)),
         );
+        let spilling_json = match row.spilling {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "null",
+        };
         let _ = write!(
             out,
-            r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json}}}"#,
+            r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json},"spilling":{spilling_json}}}"#,
             row.pid, row.used_bytes, row.shared_used_bytes, row.device_index,
         );
     }
@@ -1680,10 +1729,10 @@ fn resolve_watched_pids(rows: &[GpuProcessEntry], explicit: &[u32], top: usize) 
     if !explicit.is_empty() {
         return explicit.to_vec();
     }
-    // device_index / device_name are unused by SortKey::Dedicated's
-    // comparator (pid / used_bytes / name only) — defaulted rather than
-    // threaded through from the caller, which has no device-name
-    // context of its own to give.
+    // device_index / device_name / spilling are unused by
+    // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
+    // defaulted rather than threaded through from the caller, which has
+    // no device-name or live-spill context of its own to give.
     let ps_rows: Vec<PsRow> = rows
         .iter()
         .map(|e| PsRow {
@@ -1694,6 +1743,7 @@ fn resolve_watched_pids(rows: &[GpuProcessEntry], explicit: &[u32], top: usize) 
             shared_used_bytes: e.shared_used_bytes,
             device_index: 0,
             device_name: None,
+            spilling: None,
         })
         .collect();
     select_top_n_pids(&ps_rows, top)
@@ -2044,6 +2094,7 @@ mod tests {
             shared_used_bytes: 0,
             device_index,
             device_name: device_name.map(str::to_owned),
+            spilling: None,
         }
     }
 
@@ -2057,6 +2108,21 @@ mod tests {
             shared_used_bytes,
             device_index: 0,
             device_name: None,
+            spilling: None,
+        }
+    }
+
+    /// Like [`row`] but with an explicit `spilling` — for the SPILL
+    /// column / field specific tests.
+    fn row_spilling(pid: u32, name: Option<&str>, spilling: Option<bool>) -> PsRow {
+        PsRow {
+            pid,
+            name: name.map(str::to_owned),
+            used_bytes: 0,
+            shared_used_bytes: 0,
+            device_index: 0,
+            device_name: None,
+            spilling,
         }
     }
 
@@ -2126,7 +2192,7 @@ mod tests {
     fn format_ps_table_empty_prints_header_only() {
         let s = format_ps_table(&[]);
         // Header line ends with newline; widths default to header lengths.
-        assert_eq!(s, "PID  NAME  VRAM  SHARED  DEVICE\n");
+        assert_eq!(s, "PID  NAME  VRAM  SHARED  DEVICE  SPILL\n");
     }
 
     #[test]
@@ -2139,20 +2205,20 @@ mod tests {
             Some("RTX 5060 Ti"),
         );
         let s = format_ps_table(&[r]);
-        let expected = "PID    NAME        VRAM     SHARED  DEVICE     \n\
-                        12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti\n";
+        let expected = "PID    NAME        VRAM     SHARED  DEVICE       SPILL\n\
+                        12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti  ?    \n";
         assert_eq!(s, expected);
     }
 
     #[test]
     fn format_ps_table_protected_name_renders_question_mark() {
         // Column widths: PID=3 (header), NAME=4 (header), VRAM=7
-        // ("256 MiB"), SHARED=6 (header), DEVICE=11 ("RTX 5060 Ti").
-        // Two-space separators.
+        // ("256 MiB"), SHARED=6 (header), DEVICE=11 ("RTX 5060 Ti"),
+        // SPILL=5 (header — "?" is shorter). Two-space separators.
         let r = row(99, Some("?"), 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE     \n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti\n";
+        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
         assert_eq!(s, expected);
     }
 
@@ -2162,9 +2228,22 @@ mod tests {
         // case — both go through the `unwrap_or("?")` path.
         let r = row(99, None, 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE     \n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti\n";
+        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
         assert_eq!(s, expected);
+    }
+
+    #[test]
+    fn format_ps_table_spill_column_renders_spill_no_and_unknown() {
+        let rows = [
+            row_spilling(1, Some("a.exe"), Some(true)),
+            row_spilling(2, Some("b.exe"), Some(false)),
+            row_spilling(3, Some("c.exe"), None),
+        ];
+        let s = format_ps_table(&rows);
+        assert!(s.contains("a.exe  0 MiB  0 MiB   GPU 0   SPILL"));
+        assert!(s.contains("b.exe  0 MiB  0 MiB   GPU 0   no   "));
+        assert!(s.contains("c.exe  0 MiB  0 MiB   GPU 0   ?    "));
     }
 
     #[test]
@@ -2208,7 +2287,7 @@ mod tests {
         let s = format_ps_json(&[r]);
         assert_eq!(
             s,
-            "[{\"pid\":12345,\"name\":\"python.exe\",\"used_bytes\":8388608,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"RTX 5060 Ti\"}]\n"
+            "[{\"pid\":12345,\"name\":\"python.exe\",\"used_bytes\":8388608,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"RTX 5060 Ti\",\"spilling\":null}]\n"
         );
     }
 
@@ -2218,7 +2297,7 @@ mod tests {
         let s = format_ps_json(&[r]);
         assert_eq!(
             s,
-            "[{\"pid\":42,\"name\":null,\"used_bytes\":0,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":null}]\n"
+            "[{\"pid\":42,\"name\":null,\"used_bytes\":0,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":null,\"spilling\":null}]\n"
         );
     }
 
@@ -2229,9 +2308,22 @@ mod tests {
         let s = format_ps_json(&[a, b]);
         assert_eq!(
             s,
-            "[{\"pid\":1,\"name\":\"a.exe\",\"used_bytes\":1048576,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\"},\
-             {\"pid\":2,\"name\":\"b.exe\",\"used_bytes\":2097152,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\"}]\n"
+            "[{\"pid\":1,\"name\":\"a.exe\",\"used_bytes\":1048576,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null},\
+             {\"pid\":2,\"name\":\"b.exe\",\"used_bytes\":2097152,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null}]\n"
         );
+    }
+
+    #[test]
+    fn format_ps_json_spilling_true_false_null() {
+        let rows = [
+            row_spilling(1, Some("a.exe"), Some(true)),
+            row_spilling(2, Some("b.exe"), Some(false)),
+            row_spilling(3, Some("c.exe"), None),
+        ];
+        let s = format_ps_json(&rows);
+        assert!(s.contains(r#""pid":1,"name":"a.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":true"#));
+        assert!(s.contains(r#""pid":2,"name":"b.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":false"#));
+        assert!(s.contains(r#""pid":3,"name":"c.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":null"#));
     }
 
     #[test]
@@ -2858,6 +2950,7 @@ mod tests {
             shared_used_bytes,
             device_index: 0,
             device_name: None,
+            spilling: None,
         }
     }
 

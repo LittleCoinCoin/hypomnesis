@@ -158,6 +158,72 @@ pub const DEFAULT_DEDICATED_THRESHOLD_PCT: u64 = 85;
 /// Overridden by [`SpillTracker::with_shared_growth_threshold`].
 pub const DEFAULT_SHARED_GROWTH_BYTES: u64 = 256 * 1024 * 1024;
 
+/// One-shot spill check for `device_index`, with no [`SpillTracker`]
+/// history required.
+///
+/// What `hmn ps` uses, since a single process listing has no baseline
+/// to measure shared-memory *growth* against the way
+/// [`SpillTracker::observe`] does. Approximates
+/// [the spill condition](self#the-spill-condition) with
+/// the growth check replaced by an absolute floor: shared-resident at
+/// or above [`DEFAULT_SHARED_GROWTH_BYTES`], rather than that far
+/// *above* a first-observation baseline. **Not equivalent** to
+/// [`SpillTracker::is_spilling`] for the same instant — a workload
+/// whose own baseline shared usage already sits above the floor (an
+/// unusually large staging heap) reads `Some(true)` here and correctly
+/// `false` there once its baseline is subtracted. Prefer
+/// [`SpillTracker`] when temporal accuracy matters; this exists for
+/// tools like `hmn ps` that only ever see one snapshot.
+///
+/// Returns `None` when spill cannot be measured at all — non-Windows,
+/// pre-`WDDM 2.0`, a non-NVIDIA adapter, or a live `PDH` sample
+/// failure — never collapsed into `Some(false)`, so a caller can
+/// always tell "definitely not spilling" from "cannot tell". Succeeds
+/// on every platform (the `None` cases above are not errors);
+/// portable consumers need no `cfg`, matching [`SpillTracker::new`].
+#[must_use]
+pub fn snapshot_is_spilling(device_index: u32) -> Option<bool> {
+    #[cfg(all(windows, feature = "pdh"))]
+    {
+        let mut query = crate::gpu::pdh::AdapterMemQuery::open(device_index).ok()??;
+        let sample = query.sample().ok()?;
+        Some(saturated_with_shared_floor(
+            sample.dedicated_bytes,
+            sample.shared_bytes,
+            sample.limit_bytes,
+        ))
+    }
+    #[cfg(not(all(windows, feature = "pdh")))]
+    {
+        // EXPLICIT: no measurement source on this platform — graceful
+        // "not measurable", the same contract SpillTracker::new uses.
+        let _ = device_index;
+        None
+    }
+}
+
+/// Pure threshold check behind [`snapshot_is_spilling`] — split out so
+/// the arithmetic is unit-testable on every platform (`cfg(test)`),
+/// not only Windows + `pdh`. Mirrors [`fold`]'s two-sided condition
+/// with the growth-over-baseline term replaced by an absolute floor
+/// (see [`snapshot_is_spilling`]'s doc for why). `limit_bytes < 100` is
+/// "capacity unknown or nonsensically tiny" — the percentage would
+/// truncate to zero, making the dedicated side vacuously true — so it
+/// always returns `false`, matching `fold`'s `None`-threshold handling.
+#[cfg(any(all(windows, feature = "pdh"), test))]
+#[must_use]
+const fn saturated_with_shared_floor(
+    dedicated_bytes: u64,
+    shared_bytes: u64,
+    limit_bytes: u64,
+) -> bool {
+    if limit_bytes < 100 {
+        return false;
+    }
+    let threshold = limit_bytes / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT;
+    dedicated_bytes >= threshold && shared_bytes >= DEFAULT_SHARED_GROWTH_BYTES
+}
+
 /// One contiguous stretch of spilling observations.
 ///
 /// `#[non_exhaustive]`: fields may be added in future releases.
@@ -1059,6 +1125,89 @@ mod tests {
         assert_eq!(report.baseline_shared_bytes, BASELINE);
         assert_eq!(report.dedicated_limit_bytes, LIMIT);
         assert!(report.measurable);
+    }
+
+    // -----------------------------------------------------------------
+    // saturated_with_shared_floor (single-snapshot heuristic behind
+    // snapshot_is_spilling, used by `hmn ps`)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn saturated_with_shared_floor_below_dedicated_threshold_never_spills() {
+        // Shared far past the floor, but dedicated below 85% of LIMIT.
+        assert!(!saturated_with_shared_floor(RELAXED, SPILLED_SHARED, LIMIT));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_below_shared_floor_never_spills() {
+        // Dedicated saturated, but shared below DEFAULT_SHARED_GROWTH_BYTES.
+        assert!(!saturated_with_shared_floor(
+            SATURATED,
+            DEFAULT_SHARED_GROWTH_BYTES - 1,
+            LIMIT
+        ));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_both_sides_met_spills() {
+        assert!(saturated_with_shared_floor(
+            SATURATED,
+            DEFAULT_SHARED_GROWTH_BYTES,
+            LIMIT
+        ));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_zero_limit_never_spills() {
+        assert!(!saturated_with_shared_floor(u64::MAX, u64::MAX, 0));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_sub_100_byte_limit_never_spills() {
+        assert!(!saturated_with_shared_floor(u64::MAX, u64::MAX, 99));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_dedicated_threshold_boundary() {
+        let threshold = LIMIT / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT;
+        assert!(saturated_with_shared_floor(
+            threshold,
+            DEFAULT_SHARED_GROWTH_BYTES,
+            LIMIT
+        ));
+        assert!(!saturated_with_shared_floor(
+            threshold - 1,
+            DEFAULT_SHARED_GROWTH_BYTES,
+            LIMIT
+        ));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_c1_campaign_not_spilling() {
+        // dogfooding-orphan-attribution-and-ps-spill-flag.md, Campaign 1
+        // (--follow-new field validation, 36 processes): peak dedicated
+        // 13.69 / 15.68 GiB, peak shared 174 MiB — clean run, NOT
+        // spilling (dedicated crosses 85%, but shared never approaches
+        // the 256 MiB floor).
+        const MIB: u64 = 1024 * 1024;
+        let dedicated = 14_019 * MIB; // 13.69 GiB
+        let limit = 16_056 * MIB; // 15.68 GiB
+        let shared = 174 * MIB;
+        assert!(!saturated_with_shared_floor(dedicated, shared, limit));
+    }
+
+    #[test]
+    fn saturated_with_shared_floor_c2_campaign_spilling() {
+        // Same report, Campaign 2 before cleanup: three rows summing to
+        // ~14.3 GiB dedicated on a 16.3 GiB card (two orphaned test
+        // binaries at 8.6 GiB plus the real 5.6 GiB job), 6.8 GiB
+        // shared on the job's own row — the tenant-driven spill an
+        // 881 s prompt (vs. ~120 s predicted) confirmed by its cure.
+        const MIB: u64 = 1024 * 1024;
+        let dedicated = 14_643 * MIB; // 14.3 GiB
+        let limit = 16_691 * MIB; // 16.3 GiB
+        let shared = 6_963 * MIB; // 6.8 GiB
+        assert!(saturated_with_shared_floor(dedicated, shared, limit));
     }
 
     #[test]
