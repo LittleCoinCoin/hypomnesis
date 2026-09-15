@@ -657,15 +657,18 @@ fn run_ps(
         // Failure here is non-fatal: row's `device_name` falls back to
         // None and the formatter renders `GPU N` instead.
         let device_name = device_info(idx).ok().and_then(|d| d.name);
-        // One live spill sample per device (not per row): `snapshot_is_spilling`
+        let Ok(entries) = gpu_processes(idx) else {
+            continue;
+        };
+        // One live spill sample per device (not per row), taken only
+        // once we know this device's process listing actually
+        // succeeded — otherwise the PDH open+sample below would run
+        // for nothing on a device about to be skipped. `snapshot_is_spilling`
         // is adapter-wide, so every row on this device gets the same
         // value — the same "broadcast" shape `hmn watch`'s `spilling`
         // field already uses. `None` (not measurable) on non-Windows,
         // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup.
         let spilling = snapshot_is_spilling(idx);
-        let Ok(entries) = gpu_processes(idx) else {
-            continue;
-        };
         for entry in entries {
             if let Some(want) = pid_filter
                 && entry.pid != want
@@ -1460,7 +1463,10 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
 /// Parse a `--min <SIZE>` (`hmn ps`) / `fits <SIZE>` (`hmn fits`) value:
 /// digits (optionally with one decimal point) followed by an optional
 /// unit (`KiB`, `MiB`, `GiB`) — the exact spellings [`format_vram`]
-/// prints, so what the tool shows is always what it accepts back; a
+/// prints, so what the tool shows is always what it accepts back,
+/// including the space `format_vram` always puts before the unit
+/// (`"512 MiB"`, `"8.0 GiB"`) — a `--min "$(hmn ps ... )"`-style copy
+/// from `hmn`'s own output round-trips, not just the no-space form. A
 /// bare number means bytes. Used as a clap `value_parser`, so a parse
 /// failure surfaces as a normal `--help`-style clap usage error
 /// (`String` satisfies clap's error bound). Unlike [`parse_duration`],
@@ -1476,6 +1482,11 @@ fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
             "invalid size {s:?}: expected digits (optionally with one decimal point) followed by an optional unit (KiB, MiB, GiB)"
         ));
     }
+    // format_vram always separates the number from the unit with a
+    // space ("512 MiB", "8.0 GiB") — trim it so hmn's own VRAM/SHARED
+    // output round-trips straight back into --min/fits, not just the
+    // no-space form.
+    let unit = unit.trim_start();
     // Only ASCII digits and `.` ever reach `number` (the split above
     // excludes everything else), so this can't parse as `inf`/`NaN`/
     // negative — a plain `Err` on malformed digit grouping (e.g.
@@ -1720,8 +1731,10 @@ fn format_watch_header_text() -> String {
 
 /// Format one interval's rows as JSON Lines: one `"kind":"sample"`
 /// object per row, newline-terminated, ready to pipe to `jq -c`.
-/// `wall_clock` (the moment this interval's `gpu_processes()` call
-/// happened) is the same for every row in the interval — formatted
+/// `wall_clock` (captured at the same instant as `t_ms`'s `elapsed`,
+/// just before this interval's `gpu_processes()` call — not after,
+/// so the two timestamps in one sample never straddle the query's own
+/// duration) is the same for every row in the interval — formatted
 /// once via [`iso8601_utc_millis`], not per row.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_watch_rows_json(
@@ -2034,6 +2047,12 @@ fn run_watch(
 
     let device_name = device_info(device).ok().and_then(|d| d.name);
 
+    // Captured right before the query, matching the interval loop's
+    // elapsed/wall_clock pairing below (t_ms for this first sample is
+    // the constant Duration::ZERO, but wall_clock should still name
+    // the same instant attach actually happened, not whenever the
+    // first gpu_processes() call happens to return).
+    let first_wall_clock = SystemTime::now();
     let first_rows = match gpu_processes(device) {
         Ok(rows) => rows,
         Err(e) => {
@@ -2041,7 +2060,6 @@ fn run_watch(
             return std::process::ExitCode::from(2);
         }
     };
-    let first_wall_clock = SystemTime::now();
 
     let mut watched = resolve_watched_pids(&first_rows, &explicit, top);
     if watched.is_empty() {
@@ -2129,7 +2147,12 @@ fn run_watch(
             break 'watch;
         }
 
+        // Captured together, both right before the query, so t_ms and
+        // wall_clock in the emitted sample refer to the same instant
+        // rather than straddling gpu_processes()'s (non-zero, under
+        // load) call duration.
         let elapsed = start.elapsed();
+        let wall_clock = SystemTime::now();
         let rows = match gpu_processes(device) {
             Ok(rows) => rows,
             Err(e) => {
@@ -2140,7 +2163,6 @@ fn run_watch(
                 continue 'watch;
             }
         };
-        let wall_clock = SystemTime::now();
 
         if follow_new {
             let new_watched = resolve_watched_pids(&rows, &explicit, top);
@@ -3218,6 +3240,16 @@ mod tests {
     #[test]
     fn parse_size_bytes_trims_whitespace() {
         assert_eq!(parse_size_bytes(" 50MiB ").unwrap(), 50 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_bytes_round_trips_format_vram_output() {
+        // format_vram always puts a space before the unit ("512 MiB",
+        // "8.0 GiB") — a value copied straight from hmn's own VRAM/
+        // SHARED column must parse back, not just the no-space form.
+        assert_eq!(parse_size_bytes("512 MiB").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_size_bytes("8.0 GiB").unwrap(), 8 * 1024 * 1024 * 1024);
+        assert_eq!(format_vram(parse_size_bytes("512 MiB").unwrap()), "512 MiB");
     }
 
     // --- format_delta ---

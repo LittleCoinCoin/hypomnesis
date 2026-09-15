@@ -202,14 +202,38 @@ pub fn snapshot_is_spilling(device_index: u32) -> Option<bool> {
     }
 }
 
+/// Default (non-overridden) dedicated-saturation threshold in bytes
+/// for `limit_bytes` of adapter capacity:
+/// `limit_bytes/100 * DEFAULT_DEDICATED_THRESHOLD_PCT`. `None` when
+/// capacity is unknown or too small to assess (`limit_bytes < 100`,
+/// where the integer percentage would truncate to zero and make the
+/// dedicated side of the co-condition vacuously true).
+///
+/// Shared by [`fold`] (which may override it with an absolute figure
+/// via `TrackerState::dedicated_threshold_override`) and
+/// [`saturated_with_shared_floor`] (which never overrides) so the two
+/// can't silently drift apart on this one piece of arithmetic.
+#[cfg(any(all(windows, feature = "pdh"), test))]
+const fn default_dedicated_threshold(limit_bytes: u64) -> Option<u64> {
+    if limit_bytes < 100 {
+        None
+    } else {
+        // Integer percentage of the capacity; the sub-100-byte
+        // truncation from the division is immaterial at VRAM scale.
+        // Divide-first ordering also makes overflow impossible.
+        Some(limit_bytes / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT)
+    }
+}
+
 /// Pure threshold check behind [`snapshot_is_spilling`] — split out so
 /// the arithmetic is unit-testable on every platform (`cfg(test)`),
 /// not only Windows + `pdh`. Mirrors [`fold`]'s two-sided condition
-/// with the growth-over-baseline term replaced by an absolute floor
-/// (see [`snapshot_is_spilling`]'s doc for why). `limit_bytes < 100` is
-/// "capacity unknown or nonsensically tiny" — the percentage would
-/// truncate to zero, making the dedicated side vacuously true — so it
-/// always returns `false`, matching `fold`'s `None`-threshold handling.
+/// (via the shared [`default_dedicated_threshold`]) with the
+/// growth-over-baseline term replaced by an absolute floor (see
+/// [`snapshot_is_spilling`]'s doc for why). `None` from
+/// `default_dedicated_threshold` — capacity unknown or nonsensically
+/// tiny — always returns `false`, matching `fold`'s handling of the
+/// same case.
 #[cfg(any(all(windows, feature = "pdh"), test))]
 #[must_use]
 const fn saturated_with_shared_floor(
@@ -217,10 +241,9 @@ const fn saturated_with_shared_floor(
     shared_bytes: u64,
     limit_bytes: u64,
 ) -> bool {
-    if limit_bytes < 100 {
+    let Some(threshold) = default_dedicated_threshold(limit_bytes) else {
         return false;
-    }
-    let threshold = limit_bytes / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT;
+    };
     dedicated_bytes >= threshold && shared_bytes >= DEFAULT_SHARED_GROWTH_BYTES
 }
 
@@ -437,23 +460,18 @@ fn fold(state: &mut TrackerState, obs: RawObservation) {
     state.limit_seen = obs.limit_bytes;
     let baseline = *state.baseline_shared.get_or_insert(obs.shared_bytes);
 
-    let threshold = match state.dedicated_threshold_override {
-        Some(t) => Some(t),
-        None if obs.limit_bytes >= 100 => {
-            // Integer percentage of the capacity; the sub-100-byte
-            // truncation from the division is immaterial at VRAM
-            // scale. Divide-first ordering also makes overflow
-            // impossible.
-            Some(obs.limit_bytes / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT)
-        }
-        // EXPLICIT: capacity unknown (limit 0) or nonsensically tiny
-        // (1..100 bytes, where the integer percentage collapses to 0
-        // and `dedicated >= 0` would be vacuously true) and no
-        // override — the saturation side of the condition cannot be
-        // assessed, so the observation can never count as spilling.
-        // Peaks and counters above still update.
-        None => None,
-    };
+    // An explicit override always wins; otherwise fall back to the
+    // default capacity-percentage threshold (shared with
+    // `saturated_with_shared_floor` via `default_dedicated_threshold`
+    // so the two formulas can't silently drift apart). `None` here —
+    // capacity unknown (limit 0) or nonsensically tiny (1..100 bytes,
+    // where the integer percentage would collapse to 0 and make
+    // `dedicated >= 0` vacuously true) — means the saturation side of
+    // the condition cannot be assessed, so the observation can never
+    // count as spilling; peaks and counters above still update.
+    let threshold = state
+        .dedicated_threshold_override
+        .or_else(|| default_dedicated_threshold(obs.limit_bytes));
 
     let spilling = threshold.is_some_and(|t| {
         obs.dedicated_bytes >= t
@@ -1125,6 +1143,30 @@ mod tests {
         assert_eq!(report.baseline_shared_bytes, BASELINE);
         assert_eq!(report.dedicated_limit_bytes, LIMIT);
         assert!(report.measurable);
+    }
+
+    // -----------------------------------------------------------------
+    // default_dedicated_threshold (shared by fold and
+    // saturated_with_shared_floor)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn default_dedicated_threshold_normal_capacity() {
+        assert_eq!(
+            default_dedicated_threshold(LIMIT),
+            Some(LIMIT / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT)
+        );
+    }
+
+    #[test]
+    fn default_dedicated_threshold_zero_and_sub_100_are_unknown() {
+        assert_eq!(default_dedicated_threshold(0), None);
+        assert_eq!(default_dedicated_threshold(99), None);
+    }
+
+    #[test]
+    fn default_dedicated_threshold_boundary_at_100() {
+        assert_eq!(default_dedicated_threshold(100), Some(85));
     }
 
     // -----------------------------------------------------------------
