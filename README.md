@@ -31,6 +31,7 @@
 
 > **New to hypomnesis?**
 > - **What's eating my GPU memory right now?** → [`hmn ps`](#binary-hmn) — every process holding GPU memory, with dedicated-commit and resident-shared columns, on Windows, Linux, and macOS.
+> - **Will my next job fit before I launch it?** → [`hmn fits <SIZE>`](#hmn-fits--headroom-predicate-since-v0211) — one gateable exit code, instead of hand-rolling a `jq` check per script.
 > - **Is my training / inference run spilling into system RAM?** (Windows / `WDDM` only — spilling into a *separate* shared budget is a `WDDM` architectural concept; Linux gets a `CUDA` OOM instead, macOS `UMA` has nothing to spill *into*) → the [Is my run spilling?](docs/tutorials/is-my-run-spilling.md) tutorial — wrap the run with [`hmn spill`](#hmn-spill--wddm-spill-detection), read the episode pattern, react.
 > - **Is a job that's already running spilling?** (Windows / `WDDM` only, same reason as above) → the [watch tutorial](docs/tutorials/watching-a-running-job.md) — [`hmn watch <pid>`](#hmn-watch--attach-to-a-running-pid) attaches directly, no restart needed.
 > - **I want to measure my own process from Rust** → [Usage](#usage) — `Snapshot::now(0)`: process RSS + device-wide + per-process GPU in one call.
@@ -187,7 +188,7 @@ cargo install hypomnesis
 
 `--features cli` is still accepted but redundant on the default feature set — only needed if you've already opted out with `--no-default-features` and want the binary back.
 
-Four subcommands:
+Five subcommands:
 
 ```sh
 hmn                          # device summary (free / total per GPU)
@@ -204,6 +205,7 @@ hmn watch 12345               # attach to an ALREADY-RUNNING PID, watch for spil
 hmn watch --top 3 --json      # no PID: auto-select top 3 by committed VRAM, JSONL
 hmn watch --follow-new --json # re-select every interval: stand guard over a machine
                                # while arbitrary short-lived work happens
+hmn fits 12GiB                # headroom predicate: exit 0/1/2, gateable from a run script (since v0.2.11)
 ```
 
 Example default output (single NVIDIA dGPU, the maintainer's reference machine — Ryzen 9 5950X has no iGPU, so only one adapter surfaces):
@@ -369,6 +371,42 @@ against a log stamped with real time, like a training driver's own run
 log, without hand-converting `t_ms` offsets. Full walkthrough, including
 the campaign that motivated it:
 [Triage a job that's already running](docs/tutorials/watching-a-running-job.md).
+
+### `hmn fits` — headroom predicate (since v0.2.11)
+
+The question that actually matters before launching a job is rarely "what's on
+the GPU" but "will this job fit *right now*". `hmn fits <SIZE>` answers it in
+one command, gateable from a run script, instead of a hand-rolled
+`hmn --json | jq` check repeated in every launcher:
+
+```sh
+$ hmn fits 1GiB
+hmn: fits — 13.9 GiB free >= 1.0 GiB requested (device 0 [NVIDIA GeForce RTX 5060 Ti])
+$ echo $?
+0
+
+$ hmn fits 999GiB
+hmn: does not fit — 13.9 GiB free < 999.0 GiB requested (device 0 [NVIDIA GeForce RTX 5060 Ti])
+$ echo $?
+1
+```
+
+*(real captures, reference RTX 5060 Ti)*
+
+Exits **`0`** if `SIZE` fits in the target device's current free `VRAM`
+(`--device`, default `0`), **`1`** if it doesn't, **`2`** on a hard error (bad
+device) — deliberately parallel to `hmn watch`'s `0`/`1`/`2` contract.
+Compares against `free_bytes`, which already nets out `reserved_bytes` (see
+[Why does `used_bytes` exceed my card's total VRAM?](docs/FAQ.md#why-does-used_bytes-exceed-my-cards-total-vram)).
+`SIZE` uses the same syntax as `hmn ps --min` (see [`hmn`](#binary-hmn), above):
+a bare byte count, or a number (optionally one decimal place) with
+`KiB`/`MiB`/`GiB`. No `--json` — the point is a scriptable exit code, not
+structured output:
+
+```sh
+hmn fits 12GiB || { echo "won't fit, skipping run"; exit 1; }
+python train.py
+```
 
 ### Composable workflows
 

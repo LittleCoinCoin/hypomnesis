@@ -31,6 +31,10 @@
 //!   shipped v0.2.5 SPILL condition. `time(1)`-style scrolling sampler —
 //!   not a TUI, same discipline as `hmn spill`. Exit code conveys whether
 //!   spill was observed during the watch, for scripts/watchdogs.
+//! - `hmn fits <SIZE>` (since v0.2.11) — headroom predicate: exit `0` if
+//!   `SIZE` fits in the target device's current free VRAM, `1` if it
+//!   doesn't, `2` on a hard error. Gateable from a run script instead of
+//!   hand-rolling an `hmn --json | jq` check before every launch.
 //!
 //! Install with `cargo install hypomnesis` (the `cli` feature is
 //! default-on since v0.2.8; `--features cli` is still accepted but
@@ -71,6 +75,14 @@ use hypomnesis::{
                   state plus per-PID VRAM on a timer, printing one row per PID per interval with \
                   deltas. Not a TUI — a scrolling time(1)-style sampler, same discipline as \
                   `hmn spill`. Exit code conveys whether spill was observed, for scripts/watchdogs.\n\
+                  \n\
+                  `hmn fits <SIZE>` (since v0.2.11): headroom predicate. Exit `0` if SIZE fits in \
+                  the target device's current free VRAM (--device, default 0), `1` if it doesn't, \
+                  `2` on a hard error. SIZE uses the same syntax as `hmn ps --min`: a bare byte \
+                  count, or a number (optionally one decimal place) with KiB/MiB/GiB. Prints one \
+                  line to stderr either way; no --json — the point is a scriptable exit code, not \
+                  structured output. Gateable from a run script instead of a hand-rolled \
+                  `hmn --json | jq` check before every launch.\n\
                   \n\
                   Limitations (per-platform):\n\
                   - Linux / NVML backend is compute-only — only processes with an active CUDA \
@@ -311,6 +323,25 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Headroom predicate: exit `0` if `SIZE` currently fits in the
+    /// target device's free `VRAM`, `1` if it doesn't, `2` on a hard
+    /// error (bad `--device`). Gateable from a run script (`hmn fits
+    /// 12GiB || exit 1`) — the question that actually matters before
+    /// launching a job is rarely "what's on the GPU" but "will this
+    /// job fit right now", and this answers it in one command instead
+    /// of a hand-rolled `hmn --json | jq` check repeated per script.
+    /// Prints one line to stderr either way; no `--json` (the ask is
+    /// specifically a scriptable exit code, not structured output).
+    Fits {
+        /// Size to check, in the same syntax as `hmn ps --min`: a bare
+        /// byte count, or a number (optionally one decimal place) with
+        /// `KiB`/`MiB`/`GiB`.
+        #[arg(value_name = "SIZE", value_parser = parse_size_bytes)]
+        size: u64,
+        /// GPU index to check (NVML-canonical ordering).
+        #[arg(long, value_name = "INDEX", default_value_t = 0)]
+        device: u32,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -358,6 +389,9 @@ fn main() -> std::process::ExitCode {
             device,
             json,
         }) => return run_watch(&pids, interval, duration, top, follow_new, device, json),
+        // `fits` also bypasses the Ok/Err fold: its exit code conveys
+        // whether the size fits, not hmn's own success/failure.
+        Some(Commands::Fits { size, device }) => return run_fits(size, device),
     };
     match outcome {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -2155,6 +2189,45 @@ fn run_watch(
 }
 
 // -----------------------------------------------------------------------------
+// `fits` subcommand
+// -----------------------------------------------------------------------------
+
+/// Run the `fits` subcommand: compare `size` against `device`'s current
+/// free `VRAM` (already net of `reserved_bytes`) and print one line to
+/// stderr either way. Bypasses `main`'s `Ok`/`Err` fold — the exit code
+/// conveys the answer, not `hmn`'s own success/failure — the same
+/// pattern `run_spill`/`run_watch` use.
+fn run_fits(size: u64, device: u32) -> std::process::ExitCode {
+    let info = match device_info(device) {
+        Ok(info) => info,
+        Err(e) => {
+            eprintln!("hmn: fits failed to query device {device}: {e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let fits = size <= info.free_bytes;
+    eprintln!(
+        "hmn: {} — {} free {} {} requested (device {device}{})",
+        if fits { "fits" } else { "does not fit" },
+        format_vram(info.free_bytes),
+        if fits { ">=" } else { "<" },
+        format_vram(size),
+        info.name
+            .as_deref()
+            .map_or_else(String::new, |n| format!(" [{n}]")),
+    );
+    std::process::ExitCode::from(fits_exit_code(fits))
+}
+
+/// Map a `fits` boolean to `hmn`'s exit-code contract: `0` if it fits,
+/// `1` if it doesn't. The `2` (hard error) case is returned directly
+/// from [`run_fits`], bypassing this mapping — same split
+/// [`watch_exit_code`] uses.
+const fn fits_exit_code(fits: bool) -> u8 {
+    if fits { 0 } else { 1 }
+}
+
+// -----------------------------------------------------------------------------
 // Formatting primitives
 // -----------------------------------------------------------------------------
 
@@ -3180,6 +3253,55 @@ mod tests {
     fn watch_exit_code_clean_and_spilled() {
         assert_eq!(watch_exit_code(false), 0);
         assert_eq!(watch_exit_code(true), 1);
+    }
+
+    // --- fits_exit_code ---
+
+    #[test]
+    fn fits_exit_code_fits_and_does_not_fit() {
+        assert_eq!(fits_exit_code(true), 0);
+        assert_eq!(fits_exit_code(false), 1);
+    }
+
+    // --- fits argument parsing ---
+
+    #[test]
+    fn fits_args_parses_size_and_default_device() {
+        let cli = Cli::try_parse_from(["hmn", "fits", "12GiB"]).unwrap();
+        let Some(Commands::Fits { size, device }) = cli.command else {
+            panic!("expected Fits subcommand");
+        };
+        assert_eq!(size, 12 * 1024 * 1024 * 1024);
+        assert_eq!(device, 0);
+    }
+
+    #[test]
+    fn fits_args_device_override() {
+        let cli = Cli::try_parse_from(["hmn", "fits", "500MiB", "--device", "1"]).unwrap();
+        let Some(Commands::Fits { size, device }) = cli.command else {
+            panic!("expected Fits subcommand");
+        };
+        assert_eq!(size, 500 * 1024 * 1024);
+        assert_eq!(device, 1);
+    }
+
+    #[test]
+    fn fits_args_bare_bytes() {
+        let cli = Cli::try_parse_from(["hmn", "fits", "1048576"]).unwrap();
+        let Some(Commands::Fits { size, .. }) = cli.command else {
+            panic!("expected Fits subcommand");
+        };
+        assert_eq!(size, 1_048_576);
+    }
+
+    #[test]
+    fn fits_args_requires_size() {
+        assert!(Cli::try_parse_from(["hmn", "fits"]).is_err());
+    }
+
+    #[test]
+    fn fits_args_rejects_bad_size() {
+        assert!(Cli::try_parse_from(["hmn", "fits", "bogus"]).is_err());
     }
 
     // --- ps_row_comparator / SortKey ---

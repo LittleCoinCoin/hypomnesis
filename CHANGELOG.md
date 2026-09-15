@@ -48,6 +48,15 @@ priority order.
   back. `--min 0` is accepted as a valid no-op, unlike `--interval 0` elsewhere. The stderr summary
   line's filter clause composes `pid=`/`device=`/`min=` from a list now (was a fixed 2-filter
   match), so a fourth filter won't need another rewrite.
+- **`hmn fits <SIZE>`** (`src/bin/hmn.rs`) — a headroom predicate for gating a run script: exits
+  `0` if `SIZE` fits in the target device's current free `VRAM` (`--device`, default `0`), `1` if
+  it doesn't, `2` on a hard error (bad device) — deliberately parallel to `hmn watch`'s `0`/`1`/`2`
+  contract. Compares against `free_bytes`, which already nets out `reserved_bytes`. Shares `--min`'s
+  `parse_size_bytes` syntax. Prints one stderr line either way; no `--json` — the ask is
+  specifically a scriptable exit code, not structured output. Live-verified on the reference
+  RTX 5060 Ti: `hmn fits 1GiB` (exit `0`), `hmn fits 999GiB` (exit `1`), and a bad `--device` (exit
+  `2`). Every long GPU run in the motivating dogfooding report was about to hand-roll this exact
+  check before launching; this replaces six copies of it with one.
 
 ## [0.2.10] - 2026-08-17
 
