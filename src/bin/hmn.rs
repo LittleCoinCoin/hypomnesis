@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use hypomnesis::{
@@ -294,7 +294,12 @@ enum Commands {
         /// `{"kind":"sample",...}` object per PID per interval as it
         /// happens, plus a final `{"kind":"summary",...}` object (the
         /// adapter `SpillReport` fields plus a `per_pid[]` peak/baseline
-        /// array) when the watch ends. Pipeable to `jq -c` live.
+        /// array) when the watch ends. Each sample carries `t_ms`
+        /// (relative to attach) and, since v0.2.11, `wall_clock`
+        /// (absolute, UTC ISO-8601 with millisecond precision — the
+        /// same value for every row in one interval) for joining
+        /// against a log stamped with real time, like a training
+        /// driver's own run log. Pipeable to `jq -c` live.
         #[arg(long)]
         json: bool,
     },
@@ -998,6 +1003,66 @@ fn format_secs(d: Duration) -> String {
     format!("{:.1}s", d.as_secs_f64())
 }
 
+/// Format `t` as UTC ISO-8601 with millisecond precision
+/// (`YYYY-MM-DDThh:mm:ss.mmmZ`) — the `wall_clock` field on
+/// `hmn watch --json` samples. No date/time dependency: pure
+/// proleptic-Gregorian civil-from-days arithmetic via
+/// [`civil_from_days`] (Unix time has no leap seconds, so integer
+/// day/second arithmetic is exact). A `SystemTime` predating the Unix
+/// epoch — vanishingly unlikely on any real system clock — renders as
+/// the epoch itself rather than panicking.
+#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
+fn iso8601_utc_millis(t: SystemTime) -> String {
+    let since_epoch = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    // CAST: u128 → i64, millis-since-epoch fits comfortably (i64 spans
+    // ~292 million years either side of 1970; any real SystemTime is
+    // absurdly far inside that range).
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let total_ms = since_epoch.as_millis() as i64;
+    let ms = total_ms.rem_euclid(1000);
+    let total_secs = total_ms.div_euclid(1000);
+    let secs_of_day = total_secs.rem_euclid(86_400);
+    let days = total_secs.div_euclid(86_400);
+
+    let (year, month, day) = civil_from_days(days);
+    let hour = secs_of_day / 3600;
+    let min = (secs_of_day % 3600) / 60;
+    let sec = secs_of_day % 60;
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}.{ms:03}Z")
+}
+
+/// Proleptic-Gregorian civil date `(year, month, day)` from a day count
+/// relative to the Unix epoch (`1970-01-01` = day `0`).
+///
+/// Howard Hinnant's `civil_from_days` algorithm
+/// (<https://howardhinnant.github.io/date_algorithms.html#civil_from_days>,
+/// public domain) — pure integer arithmetic, no floating point, exact
+/// over the entire `i64` domain (not just the narrow range
+/// [`iso8601_utc_millis`] actually feeds it).
+const fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    // CAST: i64 → u64, `doe` is in [0, 146096] by construction (`era`'s
+    // division above pins `z - era*146097` into exactly that range).
+    #[allow(clippy::as_conversions, clippy::cast_sign_loss)]
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    // CAST: u64 → i64, `yoe` is in [0, 399] by construction.
+    #[allow(clippy::as_conversions, clippy::cast_possible_wrap)]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    // CAST: u64 → u32, day-of-month derived from `doy`/`mp` is in [1, 31].
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    // CAST: u64 → u32, `mp` is in [0, 11], so month is in [1, 12].
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
 /// Format the human-readable spill report block printed to stderr, under
 /// a caller-chosen `prefix` (e.g. `"hmn spill"`, `"hmn watch"`).
 ///
@@ -1547,9 +1612,17 @@ fn format_watch_header_text() -> String {
 
 /// Format one interval's rows as JSON Lines: one `"kind":"sample"`
 /// object per row, newline-terminated, ready to pipe to `jq -c`.
+/// `wall_clock` (the moment this interval's `gpu_processes()` call
+/// happened) is the same for every row in the interval — formatted
+/// once via [`iso8601_utc_millis`], not per row.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
-fn format_watch_rows_json(elapsed: Duration, rows: &[WatchSampleRow]) -> String {
+fn format_watch_rows_json(
+    elapsed: Duration,
+    wall_clock: SystemTime,
+    rows: &[WatchSampleRow],
+) -> String {
     let mut out = String::new();
+    let wall_clock_json = iso8601_utc_millis(wall_clock);
     for row in rows {
         let name_json = row.name.as_deref().map_or_else(
             || String::from("null"),
@@ -1557,7 +1630,7 @@ fn format_watch_rows_json(elapsed: Duration, rows: &[WatchSampleRow]) -> String 
         );
         let _ = writeln!(
             out,
-            r#"{{"kind":"sample","t_ms":{},"pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{}}}"#,
+            r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{}}}"#,
             duration_ms(elapsed),
             row.pid,
             row.used_bytes,
@@ -1860,6 +1933,7 @@ fn run_watch(
             return std::process::ExitCode::from(2);
         }
     };
+    let first_wall_clock = SystemTime::now();
 
     let mut watched = resolve_watched_pids(&first_rows, &explicit, top);
     if watched.is_empty() {
@@ -1927,7 +2001,10 @@ fn run_watch(
         tracker.as_mut(),
     );
     if json {
-        print!("{}", format_watch_rows_json(Duration::ZERO, &rows0));
+        print!(
+            "{}",
+            format_watch_rows_json(Duration::ZERO, first_wall_clock, &rows0)
+        );
     } else {
         print!("{}", format_watch_rows_text(Duration::ZERO, &rows0));
     }
@@ -1955,6 +2032,7 @@ fn run_watch(
                 continue 'watch;
             }
         };
+        let wall_clock = SystemTime::now();
 
         if follow_new {
             let new_watched = resolve_watched_pids(&rows, &explicit, top);
@@ -1968,7 +2046,7 @@ fn run_watch(
 
         let sample = process_sample(&rows, &mut state, &watched, elapsed, tracker.as_mut());
         if json {
-            print!("{}", format_watch_rows_json(elapsed, &sample));
+            print!("{}", format_watch_rows_json(elapsed, wall_clock, &sample));
         } else {
             print!("{}", format_watch_rows_text(elapsed, &sample));
         }
@@ -3160,9 +3238,9 @@ mod tests {
             -1_000,
             true,
         );
-        let s = format_watch_rows_json(Duration::from_millis(3_500), &[r]);
+        let s = format_watch_rows_json(Duration::from_millis(3_500), SystemTime::UNIX_EPOCH, &[r]);
         assert!(s.starts_with(
-            r#"{"kind":"sample","t_ms":3500,"pid":7,"name":"py.exe","used_bytes":1048576,"used_delta_bytes":1048576,"shared_used_bytes":424242,"shared_delta_bytes":-1000,"spilling":true}"#
+            r#"{"kind":"sample","t_ms":3500,"wall_clock":"1970-01-01T00:00:00.000Z","pid":7,"name":"py.exe","used_bytes":1048576,"used_delta_bytes":1048576,"shared_used_bytes":424242,"shared_delta_bytes":-1000,"spilling":true}"#
         ));
         assert!(s.ends_with('\n'));
     }
@@ -3170,7 +3248,7 @@ mod tests {
     #[test]
     fn format_watch_rows_json_null_name() {
         let r = watch_row(7, None, 0, 0, 0, 0, false);
-        let s = format_watch_rows_json(Duration::ZERO, &[r]);
+        let s = format_watch_rows_json(Duration::ZERO, SystemTime::UNIX_EPOCH, &[r]);
         assert!(s.contains(r#""name":null,"#));
     }
 
@@ -3180,8 +3258,79 @@ mod tests {
             watch_row(1, Some("a.exe"), 0, 0, 0, 0, false),
             watch_row(2, Some("b.exe"), 0, 0, 0, 0, false),
         ];
-        let s = format_watch_rows_json(Duration::ZERO, &rows);
+        let s = format_watch_rows_json(Duration::ZERO, SystemTime::UNIX_EPOCH, &rows);
         assert_eq!(s.lines().count(), 2);
+    }
+
+    #[test]
+    fn format_watch_rows_json_wall_clock_shared_across_rows_in_one_interval() {
+        let rows = vec![
+            watch_row(1, Some("a.exe"), 0, 0, 0, 0, false),
+            watch_row(2, Some("b.exe"), 0, 0, 0, 0, false),
+        ];
+        let wall_clock = SystemTime::UNIX_EPOCH + Duration::from_millis(1_726_308_723_482);
+        let s = format_watch_rows_json(Duration::ZERO, wall_clock, &rows);
+        assert_eq!(
+            s.matches(r#""wall_clock":"2024-09-14T10:12:03.482Z""#)
+                .count(),
+            2
+        );
+    }
+
+    // --- iso8601_utc_millis / civil_from_days ---
+
+    #[test]
+    fn iso8601_utc_millis_epoch() {
+        assert_eq!(
+            iso8601_utc_millis(SystemTime::UNIX_EPOCH),
+            "1970-01-01T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn iso8601_utc_millis_known_recent_date() {
+        // 2024-09-14T10:12:03.482Z, cross-checked against
+        // `[DateTimeOffset]::FromUnixTimeMilliseconds(1726308723482).UtcDateTime`.
+        let t = SystemTime::UNIX_EPOCH + Duration::from_millis(1_726_308_723_482);
+        assert_eq!(iso8601_utc_millis(t), "2024-09-14T10:12:03.482Z");
+    }
+
+    #[test]
+    fn iso8601_utc_millis_leap_day() {
+        // 2024-02-29T00:00:00Z = 19782 days since epoch.
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(19_782 * 86_400);
+        assert_eq!(iso8601_utc_millis(t), "2024-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn iso8601_utc_millis_century_non_leap_year_boundary() {
+        // 2000 IS a leap year (divisible by 400) — 2000-02-29 exists;
+        // 1900 is NOT (divisible by 100, not 400) — no 1900-02-29. This
+        // pins civil_from_days to the Gregorian rule, not a naive
+        // "divisible by 4" leap check. 2000-02-29T00:00:00Z = 11016 days.
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(11_016 * 86_400);
+        assert_eq!(iso8601_utc_millis(t), "2000-02-29T00:00:00.000Z");
+        // One day later rolls over to March, confirming the leap day
+        // was actually inserted rather than skipped.
+        let t_next = SystemTime::UNIX_EPOCH + Duration::from_secs(11_017 * 86_400);
+        assert_eq!(iso8601_utc_millis(t_next), "2000-03-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn iso8601_utc_millis_end_of_year_rollover() {
+        // 2023-12-31T23:59:59Z, one second before 2024-01-01T00:00:00Z
+        // (day 19723, verified independently via PowerShell's
+        // [DateTimeOffset]/Get-Date arithmetic).
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(19_723 * 86_400 - 1);
+        assert_eq!(iso8601_utc_millis(t), "2023-12-31T23:59:59.000Z");
+    }
+
+    #[test]
+    fn iso8601_utc_millis_millisecond_zero_padding() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_millis(5);
+        assert_eq!(iso8601_utc_millis(t), "1970-01-01T00:00:00.005Z");
+        let t = SystemTime::UNIX_EPOCH + Duration::from_millis(50);
+        assert_eq!(iso8601_utc_millis(t), "1970-01-01T00:00:00.050Z");
     }
 
     // --- process_sample ---

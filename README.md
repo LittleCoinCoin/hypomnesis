@@ -361,8 +361,12 @@ hmn watch 21844 --duration 5m
 `--json` streams JSON Lines to stdout — one `{"kind":"sample",...}` object
 per PID per interval as it happens, plus a final `{"kind":"summary",...}`
 object (the `SpillReport` fields plus `per_pid[]`) when the watch ends;
-pipeable to `jq -c` live. Full walkthrough, including the campaign that
-motivated it:
+pipeable to `jq -c` live. Each sample carries `t_ms` (relative to attach)
+and, since v0.2.11, `wall_clock` (absolute UTC ISO-8601 with millisecond
+precision, e.g. `"2026-09-14T10:12:03.482Z"`) — for joining a spill trace
+against a log stamped with real time, like a training driver's own run
+log, without hand-converting `t_ms` offsets. Full walkthrough, including
+the campaign that motivated it:
 [Triage a job that's already running](docs/tutorials/watching-a-running-job.md).
 
 ### Composable workflows

@@ -31,6 +31,14 @@ priority order.
   pre-`WDDM 2.0`, a non-NVIDIA adapter, or a `PDH` hiccup), matching the crate's existing
   `measurable` honesty pattern (`SpillReport`, `is_spill_measurable()`). The text table gains a
   `SPILL` column: `SPILL` / `no` / `?` (the `?` — not `no` — for the unmeasurable case).
+- **`hmn watch --json` samples gain a `wall_clock` field** (`src/bin/hmn.rs`) — absolute UTC
+  ISO-8601 with millisecond precision (`"2026-09-14T10:12:03.482Z"`), alongside the existing
+  `t_ms` (relative to attach). A new pure `iso8601_utc_millis`/`civil_from_days` pair formats it
+  with no new dependency — proleptic-Gregorian civil-from-days integer arithmetic (Howard
+  Hinnant's algorithm; Unix time has no leap seconds, so this is exact), not a `chrono`/`time`
+  crate. The same value is shared across every row sampled in one interval. Lets a spill trace be
+  joined against a log stamped with real local time (e.g. a training driver's own run log)
+  mechanically instead of by hand-converting `t_ms` offsets.
 
 ## [0.2.10] - 2026-08-17
 

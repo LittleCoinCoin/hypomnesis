@@ -115,6 +115,8 @@ closing summary:
 {"kind":"summary","measurable":true,"spilled":true,"observations":45,"baseline_shared_bytes":458842112,"peak_shared_bytes":3179388928,"peak_dedicated_bytes":16272728064,"dedicated_limit_bytes":16831741952,"total_spill_duration_ms":0,"episodes":[{"start_label":"+54.1s","end_label":"+56.1s","peak_shared_bytes":3179388928,"observations":1,"duration_ms":0}],"per_pid":[{"pid":18640,"name":"spillforge.exe","baseline_used_bytes":14239346688,"peak_used_bytes":14239375360,"baseline_shared_bytes":310120448,"peak_shared_bytes":3042873344}]}
 ```
 
+*(real capture, predates v0.2.11 — a sample line captured today would carry a `"wall_clock":"<UTC ISO-8601>"` field right after `t_ms`, e.g. `"wall_clock":"2026-09-14T10:12:03.482Z"`; the closing `"kind":"summary"` object is unchanged, since `wall_clock` is sample-only)*
+
 The **episode pattern** (many short episodes vs. one sustained one) reads
 exactly like `hmn spill`'s report —
 [Step 2 of the other tutorial](is-my-run-spilling.md#step-2--read-the-episode-pattern)
