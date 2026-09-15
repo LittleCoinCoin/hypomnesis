@@ -4,7 +4,8 @@
 **Reporter:** candle-mi oracle resurrection (`scripts/resurrect.ps1` Default tier, 19 steps, RTX 5060 Ti 16 GiB, Windows 11 / WDDM, `hmn 0.2.6`; the 2026-08-01 addition on `hmn 0.2.6` likewise)
 **Severity:** Field validation of v0.2.6 `watch` (adapter level: three for three) + **two** feature requests for **v0.2.7**: `watch --follow-new` and `ps --sort`
 **Affected area:** `hmn watch` auto-selection — the PID set is chosen once, at the first sample, and never revisited; and `hmn ps` display ordering, which is fixed to dedicated-descending
-**Status:** Proposed — v0.2.7 candidates
+**Status:** ✅ **Resolved in v0.2.7** (2026-08-02). Both requests shipped as described:
+`watch --follow-new` and `ps --sort`. See [`CHANGELOG.md`](../../CHANGELOG.md#027---2026-08-02).
 
 ---
 

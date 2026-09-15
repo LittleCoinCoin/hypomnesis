@@ -4,7 +4,10 @@
 **Reporter:** askesis `canvas` — the 38M scale-up (12L/512d/8H, fp32) on a local RTX 5060 Ti 16 GiB (Windows 11 / WDDM) and a rented RTX 5090 32 GiB (Linux, vast.ai), `hmn 0.2.7`
 **Severity:** One **install-path defect** that silenced the tool on a box billing by the hour, one **name-resolution** finding with a concrete non-elevated fix, one alias request — plus field validation of `watch` deciding a real engineering question in one command
 **Affected area:** `Cargo.toml` feature defaults; `hmn ps` / `hmn watch` name resolution (`OpenProcess`); `hmn ps --sort` value set
-**Status:** Proposed — v0.2.8 candidates
+**Status:** ✅ **Resolved in v0.2.8** (2026-08-04). All four items shipped: `cli` default-on,
+the `Toolhelp32Snapshot` name-resolution fallback, the `[exited]`/`[protected]` brackets, and the
+`--sort vram`/`--sort committed` aliases. See
+[`CHANGELOG.md`](../../CHANGELOG.md#028---2026-08-04).
 
 ---
 
