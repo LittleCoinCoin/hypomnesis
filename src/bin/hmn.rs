@@ -167,6 +167,14 @@ enum Commands {
         /// by `device_count()`.
         #[arg(long, value_name = "INDEX")]
         device: Option<u32>,
+        /// Hide rows below this total footprint (`used_bytes +
+        /// shared_used_bytes`, not dedicated alone — "who is actually
+        /// holding this card", matching `--sort total`'s definition).
+        /// Accepts a bare byte count or a number with `KiB`/`MiB`/`GiB`
+        /// (e.g. `50MiB`, `1.5GiB`) — the same units `hmn` itself
+        /// prints. `--min 0` is a valid no-op.
+        #[arg(long, value_name = "SIZE", value_parser = parse_size_bytes)]
+        min: Option<u64>,
         /// Display order: `dedicated` ("who do I kill to free VRAM?",
         /// the default), `shared` ("who is currently being paged out?"
         /// — a symptom, not a cause; always a no-op ordering on Linux
@@ -326,9 +334,10 @@ fn main() -> std::process::ExitCode {
         Some(Commands::Ps {
             pid,
             device,
+            min,
             sort,
             json,
-        }) => run_ps(pid, device, sort, json),
+        }) => run_ps(pid, device, min, sort, json),
         // `spill` bypasses the Ok/Err fold below: its exit code is the
         // wrapped command's, passed through — not hmn's own
         // success/failure.
@@ -595,6 +604,7 @@ const fn ps_row_comparator(key: SortKey) -> impl Fn(&PsRow, &PsRow) -> std::cmp:
 fn run_ps(
     pid_filter: Option<u32>,
     device_filter: Option<u32>,
+    min_filter: Option<u64>,
     sort: SortKey,
     json: bool,
 ) -> Result<()> {
@@ -625,6 +635,11 @@ fn run_ps(
         for entry in entries {
             if let Some(want) = pid_filter
                 && entry.pid != want
+            {
+                continue;
+            }
+            if let Some(min) = min_filter
+                && entry.used_bytes.saturating_add(entry.shared_used_bytes) < min
             {
                 continue;
             }
@@ -665,7 +680,7 @@ fn run_ps(
     // 2>/dev/null to suppress.
     eprintln!(
         "hmn: {}",
-        format_ps_summary(&rows, pid_filter, device_filter)
+        format_ps_summary(&rows, pid_filter, device_filter, min_filter)
     );
     Ok(())
 }
@@ -723,6 +738,7 @@ fn format_ps_summary(
     rows: &[PsRow],
     pid_filter: Option<u32>,
     device_filter: Option<u32>,
+    min_filter: Option<u64>,
 ) -> String {
     let count = rows.len();
     let protected = rows
@@ -743,14 +759,21 @@ fn format_ps_summary(
 
     let mut out = format!("{count} {noun} found");
 
-    let filter_clause = match (pid_filter, device_filter) {
-        (Some(p), Some(d)) => Some(format!("pid={p} device={d}")),
-        (Some(p), None) => Some(format!("pid={p}")),
-        (None, Some(d)) => Some(format!("device={d}")),
-        (None, None) => None,
-    };
-    if let Some(clause) = filter_clause {
-        let _ = write!(out, " matching {clause}");
+    // Vec rather than a fixed-arity match: three independent optional
+    // filters compose more clearly as "push what's present, join with
+    // spaces" than as an 8-arm match on a 3-tuple.
+    let mut clauses: Vec<String> = Vec::new();
+    if let Some(p) = pid_filter {
+        clauses.push(format!("pid={p}"));
+    }
+    if let Some(d) = device_filter {
+        clauses.push(format!("device={d}"));
+    }
+    if let Some(m) = min_filter {
+        clauses.push(format!("min={}", format_vram(m)));
+    }
+    if !clauses.is_empty() {
+        let _ = write!(out, " matching {}", clauses.join(" "));
     }
 
     // Committed-total + protected parenthetical. The word "committed"
@@ -1398,6 +1421,57 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
         return Err(format!("invalid duration {s:?}: must be greater than zero"));
     }
     Ok(Duration::from_millis(millis))
+}
+
+/// Parse a `--min <SIZE>` (`hmn ps`) / `fits <SIZE>` (`hmn fits`) value:
+/// digits (optionally with one decimal point) followed by an optional
+/// unit (`KiB`, `MiB`, `GiB`) — the exact spellings [`format_vram`]
+/// prints, so what the tool shows is always what it accepts back; a
+/// bare number means bytes. Used as a clap `value_parser`, so a parse
+/// failure surfaces as a normal `--help`-style clap usage error
+/// (`String` satisfies clap's error bound). Unlike [`parse_duration`],
+/// `0` is accepted — `--min 0` is a valid (if useless) no-op filter.
+fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
+    let trimmed = s.trim();
+    let split_at = trimmed
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(trimmed.len());
+    let (number, unit) = trimmed.split_at(split_at);
+    if number.is_empty() {
+        return Err(format!(
+            "invalid size {s:?}: expected digits (optionally with one decimal point) followed by an optional unit (KiB, MiB, GiB)"
+        ));
+    }
+    // Only ASCII digits and `.` ever reach `number` (the split above
+    // excludes everything else), so this can't parse as `inf`/`NaN`/
+    // negative — a plain `Err` on malformed digit grouping (e.g.
+    // "1.2.3") is the only failure mode left to handle.
+    let value: f64 = number
+        .parse()
+        .map_err(|_| format!("invalid size {s:?}: {number:?} is not a number"))?;
+    let multiplier: u64 = match unit {
+        "" => 1,
+        "KiB" => 1024,
+        "MiB" => 1024 * 1024,
+        "GiB" => 1024 * 1024 * 1024,
+        other => {
+            return Err(format!(
+                "invalid size {s:?}: unknown unit {other:?} (expected KiB, MiB, or GiB)"
+            ));
+        }
+    };
+    // CAST: f64 → u64, `value * multiplier` is bounded by realistic
+    // VRAM/RAM sizes, far below f64's exact-integer ceiling (2^53
+    // bytes ≈ 8 PiB) — `.round()` first so the cast never truncates a
+    // near-integer float down by one from floating-point rounding.
+    #[allow(
+        clippy::as_conversions,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation
+    )]
+    let bytes = (value * multiplier as f64).round() as u64;
+    Ok(bytes)
 }
 
 /// Sleep for `total`, checking `interrupted` every
@@ -2472,7 +2546,7 @@ mod tests {
     #[test]
     fn format_ps_summary_zero_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), None, None),
+            format_ps_summary(&unprotected_rows(0), None, None, None),
             "0 GPU processes found."
         );
     }
@@ -2483,7 +2557,7 @@ mod tests {
         // get a committed-total parenthetical (the figure is 0 MiB —
         // honest, even when uninteresting).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), None, None),
+            format_ps_summary(&unprotected_rows(1), None, None, None),
             "1 GPU process found (0 MiB committed total)."
         );
     }
@@ -2491,7 +2565,7 @@ mod tests {
     #[test]
     fn format_ps_summary_many_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(7), None, None),
+            format_ps_summary(&unprotected_rows(7), None, None, None),
             "7 GPU processes found (0 MiB committed total)."
         );
     }
@@ -2501,7 +2575,7 @@ mod tests {
         // Zero rows → no parenthetical at all (committed-total
         // elides; the filter clause still appears).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), Some(12345), None),
+            format_ps_summary(&unprotected_rows(0), Some(12345), None, None),
             "0 GPU processes found matching pid=12345."
         );
     }
@@ -2509,7 +2583,7 @@ mod tests {
     #[test]
     fn format_ps_summary_with_device_filter() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(2), None, Some(0)),
+            format_ps_summary(&unprotected_rows(2), None, Some(0), None),
             "2 GPU processes found matching device=0 (0 MiB committed total)."
         );
     }
@@ -2517,8 +2591,29 @@ mod tests {
     #[test]
     fn format_ps_summary_with_both_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), Some(99), Some(1)),
+            format_ps_summary(&unprotected_rows(1), Some(99), Some(1), None),
             "1 GPU process found matching pid=99 device=1 (0 MiB committed total)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_min_filter() {
+        assert_eq!(
+            format_ps_summary(&unprotected_rows(0), None, None, Some(50 * 1024 * 1024)),
+            "0 GPU processes found matching min=50 MiB."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_all_three_filters() {
+        assert_eq!(
+            format_ps_summary(
+                &unprotected_rows(1),
+                Some(99),
+                Some(1),
+                Some(50 * 1024 * 1024)
+            ),
+            "1 GPU process found matching pid=99 device=1 min=50 MiB (0 MiB committed total)."
         );
     }
 
@@ -2535,7 +2630,7 @@ mod tests {
             row(1003, Some("c.exe"), FOUR_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (12.0 GiB committed total)."
         );
     }
@@ -2550,7 +2645,7 @@ mod tests {
             row(1002, Some("b.exe"), QUARTER_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "2 GPU processes found (512 MiB committed total)."
         );
     }
@@ -2562,7 +2657,7 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -2572,7 +2667,7 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -2581,7 +2676,7 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -2591,7 +2686,7 @@ mod tests {
         // No protected rows → no `M protected …` clause, but the
         // committed-total parenthetical still appears.
         assert_eq!(
-            format_ps_summary(&unprotected_rows(5), None, None),
+            format_ps_summary(&unprotected_rows(5), None, None, None),
             "5 GPU processes found (0 MiB committed total)."
         );
     }
@@ -2601,7 +2696,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, Some(42), Some(0)),
+            format_ps_summary(&rows, Some(42), Some(0), None),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -2615,7 +2710,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -2632,7 +2727,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -2646,7 +2741,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3001, Some("[exited]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -2659,7 +2754,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(4, Some("[kernel]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None),
+            format_ps_summary(&rows, None, None, None),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -2752,6 +2847,29 @@ mod tests {
     #[test]
     fn ps_args_sort_rejects_unknown_key() {
         assert!(Cli::try_parse_from(["hmn", "ps", "--sort", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn ps_args_min_parses_size() {
+        let cli = Cli::try_parse_from(["hmn", "ps", "--min", "50MiB"]).unwrap();
+        let Some(Commands::Ps { min, .. }) = cli.command else {
+            panic!("expected Ps subcommand");
+        };
+        assert_eq!(min, Some(50 * 1024 * 1024));
+    }
+
+    #[test]
+    fn ps_args_min_defaults_to_none() {
+        let cli = Cli::try_parse_from(["hmn", "ps"]).unwrap();
+        let Some(Commands::Ps { min, .. }) = cli.command else {
+            panic!("expected Ps subcommand");
+        };
+        assert_eq!(min, None);
+    }
+
+    #[test]
+    fn ps_args_min_rejects_bad_size() {
+        assert!(Cli::try_parse_from(["hmn", "ps", "--min", "bogus"]).is_err());
     }
 
     // --- spill argument parsing ---
@@ -2979,6 +3097,54 @@ mod tests {
     #[test]
     fn parse_duration_trims_whitespace() {
         assert_eq!(parse_duration(" 30s ").unwrap(), Duration::from_secs(30));
+    }
+
+    // --- parse_size_bytes ---
+
+    #[test]
+    fn parse_size_bytes_bare_number_is_bytes() {
+        assert_eq!(parse_size_bytes("1048576").unwrap(), 1_048_576);
+    }
+
+    #[test]
+    fn parse_size_bytes_kib_mib_gib_units() {
+        assert_eq!(parse_size_bytes("50KiB").unwrap(), 50 * 1024);
+        assert_eq!(parse_size_bytes("50MiB").unwrap(), 50 * 1024 * 1024);
+        assert_eq!(parse_size_bytes("12GiB").unwrap(), 12 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_bytes_decimal_value() {
+        assert_eq!(
+            parse_size_bytes("1.5GiB").unwrap(),
+            1024 * 1024 * 1024 + 512 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn parse_size_bytes_zero_is_accepted() {
+        // Unlike parse_duration, 0 is a valid (if useless) no-op filter.
+        assert_eq!(parse_size_bytes("0").unwrap(), 0);
+        assert_eq!(parse_size_bytes("0MiB").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_size_bytes_rejects_unknown_unit() {
+        assert!(parse_size_bytes("50TiB").is_err());
+        assert!(parse_size_bytes("50mib").is_err()); // case-sensitive, matches format_vram's own casing
+    }
+
+    #[test]
+    fn parse_size_bytes_rejects_empty_and_non_numeric() {
+        assert!(parse_size_bytes("").is_err());
+        assert!(parse_size_bytes("GiB").is_err());
+        assert!(parse_size_bytes("-5MiB").is_err());
+        assert!(parse_size_bytes("1.2.3MiB").is_err());
+    }
+
+    #[test]
+    fn parse_size_bytes_trims_whitespace() {
+        assert_eq!(parse_size_bytes(" 50MiB ").unwrap(), 50 * 1024 * 1024);
     }
 
     // --- format_delta ---

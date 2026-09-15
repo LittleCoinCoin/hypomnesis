@@ -39,6 +39,15 @@ priority order.
   crate. The same value is shared across every row sampled in one interval. Lets a spill trace be
   joined against a log stamped with real local time (e.g. a training driver's own run log)
   mechanically instead of by hand-converting `t_ms` offsets.
+- **`hmn ps --min <SIZE>`** (`src/bin/hmn.rs`) — hides rows below a total footprint
+  (`used_bytes + shared_used_bytes`, not dedicated alone — "who is actually holding this card",
+  matching `--sort total`'s definition), turning what used to need piping through `awk`/`jq` into
+  a one-liner. A new shared `parse_size_bytes` parser (also used by `hmn fits`, below) accepts a
+  bare byte count or a number — optionally one decimal place — with `KiB`/`MiB`/`GiB`, the exact
+  unit spellings `hmn` itself already prints, so what the tool shows is always what it accepts
+  back. `--min 0` is accepted as a valid no-op, unlike `--interval 0` elsewhere. The stderr summary
+  line's filter clause composes `pid=`/`device=`/`min=` from a list now (was a fixed 2-filter
+  match), so a fourth filter won't need another rewrite.
 
 ## [0.2.10] - 2026-08-17
 

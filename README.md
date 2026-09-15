@@ -197,6 +197,7 @@ hmn ps --pid 12345           # filter to one PID
 hmn ps --device 0            # filter to one GPU on multi-GPU rigs
 hmn ps --json                # scriptable output
 hmn ps --sort total           # order by dedicated + shared instead of dedicated alone
+hmn ps --min 50MiB            # hide rows below 50 MiB total footprint (since v0.2.11)
 hmn spill -- python train.py # run a command, report WDDM spill on exit
 hmn spill --interval 250 --json -- ollama serve   # slower polling, JSON report
 hmn watch 12345               # attach to an ALREADY-RUNNING PID, watch for spill
@@ -380,6 +381,8 @@ hmn ps --json | jq 'sort_by(-.used_bytes) | .[:5]'
 ```
 
 (`hmn ps --sort dedicated` — the default — now covers this natively for the whole table, in both text and `--json` form; the `jq` recipe stays handy for slicing to a specific top-N or sorting by a field `--sort` doesn't offer, like `pid` or `name`.)
+
+(`hmn ps --min 50MiB` — since v0.2.11 — now covers "hide desktop noise below a threshold" natively, in both text and `--json` form, filtering on *total* footprint — dedicated + shared, matching `--sort total`'s definition — rather than either alone; the kill recipe below still reaches for `jq` because it filters on dedicated specifically, to decide what's actually worth killing.)
 
 **Terminate any process holding more than 1 GiB of `VRAM`** — the JSON output composes with the platform's native kill command. Windows (PowerShell or cmd):
 
