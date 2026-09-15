@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-09-15
+
 Driven by a candle-mi dogfooding report
 ([2026-09-14](docs/dogfooding-feedbacks/dogfooding-orphan-attribution-and-ps-spill-flag.md))
 that field-validated v0.2.7 `watch --follow-new` (36 sequential processes, clean) and diagnosed

@@ -1123,6 +1123,12 @@ fn iso8601_utc_millis(t: SystemTime) -> String {
 /// therefore panics in a debug build) for `z` within `719_468` of
 /// `i64::MAX`, a range this `const fn`'s signature doesn't itself rule
 /// out for a hypothetical wider caller.
+// EXPLICIT: `doe` (day-of-era) and `doy` (day-of-year) are Hinnant's own
+// algorithm variable names, kept verbatim from the reference for
+// traceability against the linked writeup — renaming them to appease
+// `similar_names` would make this harder to audit against its source,
+// not easier to read.
+#[allow(clippy::similar_names)]
 const fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

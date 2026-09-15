@@ -189,6 +189,7 @@ pub const DEFAULT_SHARED_GROWTH_BYTES: u64 = 256 * 1024 * 1024;
 /// platform (the `None` cases above are not errors — this function has
 /// no separate error return, unlike [`SpillTracker::new`] on the same
 /// inputs); portable consumers need no `cfg`.
+#[allow(clippy::missing_const_for_fn)] // const only on non-Windows builds (body collapses)
 #[must_use]
 pub fn snapshot_is_spilling(device_index: u32) -> Option<bool> {
     #[cfg(all(windows, feature = "pdh"))]
