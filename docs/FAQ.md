@@ -161,9 +161,14 @@ row on that device (the same "same value on every row" shape `hmn watch`'s own `
 already uses). **This is not equivalent to `hmn watch`'s verdict for the same instant** — a
 workload whose own baseline shared usage already sits above 256 MiB (an unusually large staging
 heap) reads `SPILL` here and correctly `no` there once its baseline is subtracted. `null`
-(`?` in the text table) means spill isn't measurable at all — non-Windows, pre-`WDDM 2.0`, a
-non-NVIDIA adapter, or a `PDH` hiccup — and is never collapsed into `false`/`no`, so a script
-checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". Reach for
+(`?` in the text table) means spill isn't measurable at all — non-Windows, built without the
+`pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, or the adapter's dedicated
+capacity itself coming back unassessable — and is never collapsed into `false`/`no`, so a script
+checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". `hmn
+watch`'s own SPILL column/`spilling` field carries the identical `null`/`?` honesty (since
+v0.2.11) for its own unmeasurable case — no tracker constructed, or `SpillTracker::is_measurable()`
+false for this run — so the two commands never disagree about what "can't tell" looks like, only
+about what "spilling" itself means (instantaneous floor vs. growth-over-baseline). Reach for
 `hmn watch`/`hmn spill` when the growth-over-baseline distinction actually matters — `hmn ps` is
 for "is anything spilling right now, at a glance", not the authoritative temporal verdict.
 

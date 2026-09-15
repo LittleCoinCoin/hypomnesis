@@ -19,44 +19,73 @@ priority order.
 
 - **`hmn ps` gains a SPILL column / `spilling` JSON field** (`src/spill.rs`, `src/bin/hmn.rs`) —
   a new library function, `hypomnesis::snapshot_is_spilling(device_index) -> Option<bool>`,
-  takes one live adapter-wide `PDH` sample (the same source `hmn spill`/`hmn watch` already use)
-  and applies a *single-snapshot* approximation of the v0.2.5 spill co-condition: adapter
-  dedicated commit at or above the existing 85% threshold AND adapter shared-resident at or
-  above the existing 256 MiB floor — an absolute floor rather than growth above a baseline,
-  since a one-shot `ps` listing has no history to measure growth against. **Not equivalent** to
+  takes one live adapter-wide `PDH` sample (the same source `hmn spill`/`hmn watch` already use),
+  sampled *before* the process listing so the SPILL verdict and the SHARED figures on the same
+  row describe the same instant rather than straddling `gpu_processes()`'s own call duration, and
+  applies a *single-snapshot* approximation of the v0.2.5 spill co-condition: adapter dedicated
+  commit at or above the existing 85% threshold AND adapter shared-resident at or above the
+  existing 256 MiB floor — an absolute floor rather than growth above a baseline, since a
+  one-shot `ps` listing has no history to measure growth against. **Not equivalent** to
   `hmn watch`'s verdict for the same instant (see the function's rustdoc and the new `hmn --help`
   Limitations bullet). Computed once per device and broadcast to every row on it, matching
   `hmn watch`'s existing "same value on every row" shape. `ps --json` rows gain `"spilling":
-  true|false|null` — `null`, never `false`, when spill isn't measurable here (non-Windows,
-  pre-`WDDM 2.0`, a non-NVIDIA adapter, or a `PDH` hiccup), matching the crate's existing
-  `measurable` honesty pattern (`SpillReport`, `is_spill_measurable()`). The text table gains a
-  `SPILL` column: `SPILL` / `no` / `?` (the `?` — not `no` — for the unmeasurable case).
+  true|false|null` — `null`, never `false`, when spill isn't measurable here (non-Windows, built
+  without the `pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, **or the
+  adapter's dedicated capacity coming back unassessable**, a case the underlying threshold helper
+  now propagates as `None` all the way through rather than silently reading as "measured, not
+  spilling") — matching the crate's existing `measurable` honesty pattern (`SpillReport`,
+  `is_spill_measurable()`). The text table gains a `SPILL` column: `SPILL` / `no` / `?` (the `?`
+  — not `no` — for the unmeasurable case). `hmn watch`'s own SPILL column/`spilling` field gets
+  the identical `Option<bool>` treatment in the same release, so the two commands' spill columns
+  agree on what "can't tell" looks like.
 - **`hmn watch --json` samples gain a `wall_clock` field** (`src/bin/hmn.rs`) — absolute UTC
   ISO-8601 with millisecond precision (`"2026-09-14T10:12:03.482Z"`), alongside the existing
-  `t_ms` (relative to attach). A new pure `iso8601_utc_millis`/`civil_from_days` pair formats it
-  with no new dependency — proleptic-Gregorian civil-from-days integer arithmetic (Howard
-  Hinnant's algorithm; Unix time has no leap seconds, so this is exact), not a `chrono`/`time`
-  crate. The same value is shared across every row sampled in one interval. Lets a spill trace be
-  joined against a log stamped with real local time (e.g. a training driver's own run log)
-  mechanically instead of by hand-converting `t_ms` offsets.
+  `t_ms` (relative to attach), captured at the same instant as `t_ms`'s own reference point —
+  including the first sample, where the `t_ms`-zero `Instant` is now taken right alongside
+  `wall_clock` rather than after the attach-time setup work (`SpillTracker::new`'s `PDH`
+  enumeration, in particular) that used to sit between them. A new pure
+  `iso8601_utc_millis`/`civil_from_days` pair formats it with no new dependency —
+  proleptic-Gregorian civil-from-days integer arithmetic (Howard Hinnant's algorithm; Unix time
+  has no leap seconds, so this is exact over every day count a real system clock can produce).
+  The same value is shared across every row sampled in one interval. Lets a spill trace be joined
+  against a log stamped with real local time (e.g. a training driver's own run log) mechanically
+  instead of by hand-converting `t_ms` offsets.
 - **`hmn ps --min <SIZE>`** (`src/bin/hmn.rs`) — hides rows below a total footprint
   (`used_bytes + shared_used_bytes`, not dedicated alone — "who is actually holding this card",
   matching `--sort total`'s definition), turning what used to need piping through `awk`/`jq` into
   a one-liner. A new shared `parse_size_bytes` parser (also used by `hmn fits`, below) accepts a
-  bare byte count or a number — optionally one decimal place — with `KiB`/`MiB`/`GiB`, the exact
-  unit spellings `hmn` itself already prints, so what the tool shows is always what it accepts
-  back. `--min 0` is accepted as a valid no-op, unlike `--interval 0` elsewhere. The stderr summary
-  line's filter clause composes `pid=`/`device=`/`min=` from a list now (was a fixed 2-filter
-  match), so a fourth filter won't need another rewrite.
+  bare byte count or a decimal number with `KiB`/`MiB`/`GiB`, the exact unit spellings `hmn`
+  itself already prints (including the space `format_vram` always puts before the unit), so what
+  the tool shows is always what it accepts back; an absurdly large value is rejected as a usage
+  error rather than silently saturating to `u64::MAX`. `--min 0` is accepted as a valid no-op,
+  unlike `--interval 0` elsewhere. The stderr summary line's filter clause composes
+  `pid=`/`device=`/`min=` from a list now (was a fixed 2-filter match), so a fourth filter won't
+  need another rewrite — and echoes `--min` through a new precise formatter rather than the
+  table-column one, so a sub-MiB (or otherwise imprecisely-rounding) threshold is never
+  misreported as the documented `--min 0` no-op.
 - **`hmn fits <SIZE>`** (`src/bin/hmn.rs`) — a headroom predicate for gating a run script: exits
   `0` if `SIZE` fits in the target device's current free `VRAM` (`--device`, default `0`), `1` if
   it doesn't, `2` on a hard error (bad device) — deliberately parallel to `hmn watch`'s `0`/`1`/`2`
-  contract. Compares against `free_bytes`, which already nets out `reserved_bytes`. Shares `--min`'s
-  `parse_size_bytes` syntax. Prints one stderr line either way; no `--json` — the ask is
-  specifically a scriptable exit code, not structured output. Live-verified on the reference
-  RTX 5060 Ti: `hmn fits 1GiB` (exit `0`), `hmn fits 999GiB` (exit `1`), and a bad `--device` (exit
-  `2`). Every long GPU run in the motivating dogfooding report was about to hand-roll this exact
-  check before launching; this replaces six copies of it with one.
+  contract. The message always states an exact headroom/shortfall margin, so a near-miss where
+  `free`/`requested` round to the same displayed figure still reads unambiguously rather than as
+  a self-contradiction. `free_bytes` nets out `reserved_bytes` on the NVML path only — the
+  message and rustdoc are explicit that the Windows `DXGI`-alone fallback and macOS (a static
+  working-set budget, not a live gauge) are narrower. Shares `--min`'s `parse_size_bytes` syntax.
+  Prints one stderr line either way; no `--json` — the ask is specifically a scriptable exit code,
+  not structured output. Live-verified on the reference RTX 5060 Ti: `hmn fits 1GiB` (exit `0`),
+  `hmn fits 999GiB` (exit `1`), and a bad `--device` (exit `2`). Every long GPU run in the
+  motivating dogfooding report was about to hand-roll this exact check before launching; this
+  replaces six copies of it with one.
+
+Two independent code-review passes (the second explicitly a fresh re-review at maximum effort,
+run after the first's fixes had already landed) found and closed a further batch of issues in
+the four features above before this entry was considered final: the SPILL/`spilling` honesty
+contract silently collapsing to `Some(false)`/`false` for an unassessable adapter capacity or an
+unmeasurable `hmn watch` tracker; the `wall_clock`/`t_ms` pairing skew on `watch`'s first sample;
+`hmn fits`'s self-contradictory near-miss messages; `--min`'s sub-MiB summary misreport; and
+`parse_size_bytes` silently saturating an out-of-range value instead of rejecting it. Two new
+formatting helpers, `format_vram_precise` and `device_name_suffix`, were extracted along the way
+to close the display-precision issues and a threefold-duplicated `" [name]"` idiom respectively.
 
 ## [0.2.10] - 2026-08-17
 

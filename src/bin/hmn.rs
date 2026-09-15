@@ -79,7 +79,7 @@ use hypomnesis::{
                   `hmn fits <SIZE>` (since v0.2.11): headroom predicate. Exit `0` if SIZE fits in \
                   the target device's current free VRAM (--device, default 0), `1` if it doesn't, \
                   `2` on a hard error. SIZE uses the same syntax as `hmn ps --min`: a bare byte \
-                  count, or a number (optionally one decimal place) with KiB/MiB/GiB. Prints one \
+                  count, or a decimal number with KiB/MiB/GiB. Prints one \
                   line to stderr either way; no --json — the point is a scriptable exit code, not \
                   structured output. Gateable from a run script instead of a hand-rolled \
                   `hmn --json | jq` check before every launch.\n\
@@ -317,9 +317,13 @@ enum Commands {
         /// array) when the watch ends. Each sample carries `t_ms`
         /// (relative to attach) and, since v0.2.11, `wall_clock`
         /// (absolute, UTC ISO-8601 with millisecond precision — the
-        /// same value for every row in one interval) for joining
+        /// same value for every row in one interval, captured at the
+        /// same instant as `t_ms`'s own reference point) for joining
         /// against a log stamped with real time, like a training
-        /// driver's own run log. Pipeable to `jq -c` live.
+        /// driver's own run log. `spilling` is `true`/`false`/`null`
+        /// (since v0.2.11) — `null`, never `false`, when this run has
+        /// no measurable spill source, matching `hmn ps`'s SPILL
+        /// column honesty contract. Pipeable to `jq -c` live.
         #[arg(long)]
         json: bool,
     },
@@ -334,8 +338,7 @@ enum Commands {
     /// specifically a scriptable exit code, not structured output).
     Fits {
         /// Size to check, in the same syntax as `hmn ps --min`: a bare
-        /// byte count, or a number (optionally one decimal place) with
-        /// `KiB`/`MiB`/`GiB`.
+        /// byte count, or a decimal number with `KiB`/`MiB`/`GiB`.
         #[arg(value_name = "SIZE", value_parser = parse_size_bytes)]
         size: u64,
         /// GPU index to check (NVML-canonical ordering).
@@ -465,12 +468,7 @@ fn format_summary(snaps: &[Snapshot]) -> String {
         };
         let free_mib = bytes_to_mib(dev.free_bytes);
         let total_mib = bytes_to_mib(dev.total_bytes);
-        // BORROW: explicit Option::as_deref + map_or — name is
-        // Option<String>; we need an owned suffix String.
-        let name_suffix = dev
-            .name
-            .as_deref()
-            .map_or(String::new(), |n| format!(" [{n}]"));
+        let name_suffix = device_name_suffix(dev.name.as_deref());
         // Driver/firmware carve-out, when the backend surfaced it (NVML
         // R510+). It is a *subset* of `total_mib` (NVML's
         // `total = reserved + free + used`), so the parenthetical reads as
@@ -627,8 +625,10 @@ const fn ps_row_comparator(key: SortKey) -> impl Fn(&PsRow, &PsRow) -> std::cmp:
 }
 
 /// Run the `ps` subcommand: collect process rows for the selected
-/// device(s), apply the `--pid` filter, sort per `--sort`, then emit
-/// either a text table or JSON.
+/// device(s) — sampling one live adapter-wide spill check per device
+/// along the way (see [`snapshot_is_spilling`]) — apply the `--pid` /
+/// `--min` filters, sort per `--sort`, then emit either a text table
+/// or JSON.
 //
 // Returns `Result<()>` for symmetry with `run_summary` so `main` can
 // dispatch through one match arm. The body never produces an `Err` (per-device
@@ -657,18 +657,30 @@ fn run_ps(
         // Failure here is non-fatal: row's `device_name` falls back to
         // None and the formatter renders `GPU N` instead.
         let device_name = device_info(idx).ok().and_then(|d| d.name);
-        let Ok(entries) = gpu_processes(idx) else {
-            continue;
-        };
-        // One live spill sample per device (not per row), taken only
-        // once we know this device's process listing actually
-        // succeeded — otherwise the PDH open+sample below would run
-        // for nothing on a device about to be skipped. `snapshot_is_spilling`
+        // One live spill sample per device (not per row): `snapshot_is_spilling`
         // is adapter-wide, so every row on this device gets the same
         // value — the same "broadcast" shape `hmn watch`'s `spilling`
         // field already uses. `None` (not measurable) on non-Windows,
         // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup.
+        //
+        // Sampled *before* gpu_processes(idx), not after: the SHARED
+        // column on each row and the SPILL verdict broadcast onto it
+        // should describe the same instant. Sampling after would let a
+        // process's per-process PDH enumeration (which gpu_processes
+        // performs) and the Toolhelp32Snapshot name-resolution walk
+        // elapse in between — real time under load — so a job that
+        // starts or stops spilling in that gap would show a SHARED
+        // figure and a SPILL verdict from two different moments. This
+        // does mean the PDH open+sample below still runs even for a
+        // device every row of which the --pid/--min filters end up
+        // dropping; that's the accepted trade (measured negligible on
+        // the reference machine — see CHANGELOG) for not straddling
+        // gpu_processes()'s own call duration, the same call-ordering
+        // discipline `hmn watch`'s wall_clock/t_ms pairing uses.
         let spilling = snapshot_is_spilling(idx);
+        let Ok(entries) = gpu_processes(idx) else {
+            continue;
+        };
         for entry in entries {
             if let Some(want) = pid_filter
                 && entry.pid != want
@@ -727,9 +739,11 @@ fn run_ps(
 ///
 /// Two appendices after the noun, each elided when not applicable:
 ///
-/// - **Filter clause** (` matching pid=N device=M`): appended only
-///   when at least one filter is active. Supports any combination of
-///   `--pid` and `--device`.
+/// - **Filter clause** (` matching pid=N device=M min=X unit`):
+///   appended only when at least one filter is active. Supports any
+///   combination of `--pid`, `--device`, and `--min` (echoed via
+///   [`format_vram_precise`], not [`format_vram`], so a sub-MiB or
+///   otherwise-imprecise `--min` value is never misreported).
 /// - **Committed-total parenthetical** (` (X.Y unit committed total)`,
 ///   formatted via [`format_vram`] so it renders as `MiB` below 1
 ///   `GiB` and `GiB` to one decimal place otherwise): appended only
@@ -807,7 +821,11 @@ fn format_ps_summary(
         clauses.push(format!("device={d}"));
     }
     if let Some(m) = min_filter {
-        clauses.push(format!("min={}", format_vram(m)));
+        // format_vram_precise, not format_vram: pid=/device= echo exact
+        // values, and format_vram's MiB-below-1-GiB rounding would
+        // print a real sub-MiB --min as "0 MiB" — indistinguishable
+        // from the documented --min 0 no-op.
+        clauses.push(format!("min={}", format_vram_precise(m)));
     }
     if !clauses.is_empty() {
         let _ = write!(out, " matching {}", clauses.join(" "));
@@ -1098,8 +1116,13 @@ fn iso8601_utc_millis(t: SystemTime) -> String {
 /// Howard Hinnant's `civil_from_days` algorithm
 /// (<https://howardhinnant.github.io/date_algorithms.html#civil_from_days>,
 /// public domain) — pure integer arithmetic, no floating point, exact
-/// over the entire `i64` domain (not just the narrow range
-/// [`iso8601_utc_millis`] actually feeds it).
+/// over a domain far wider than the narrow range
+/// [`iso8601_utc_millis`] actually feeds it (any `z` reachable from a
+/// real `SystemTime`, `unwrap_or_default`-clamped to `>= 0`). Not
+/// exact over the *entire* `i64` domain: `z + 719_468` overflows (and
+/// therefore panics in a debug build) for `z` within `719_468` of
+/// `i64::MAX`, a range this `const fn`'s signature doesn't itself rule
+/// out for a hypothetical wider caller.
 const fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -1355,9 +1378,13 @@ struct WatchSampleRow {
     /// Adapter-wide instantaneous spill state at this sample
     /// ([`SpillTracker::is_spilling`]) — the same value on every row
     /// sharing this interval's timestamp; spill is a device-level
-    /// phenomenon, not a per-PID one. `false` when spill tracking is
-    /// unavailable.
-    spilling: bool,
+    /// phenomenon, not a per-PID one. `None` when spill isn't
+    /// measurable here (no tracker constructed, or
+    /// `SpillTracker::is_measurable` is false for this instance —
+    /// Linux/macOS, no `pdh` feature, no `GPU Adapter Memory` counter
+    /// set) — never collapsed into `Some(false)`, matching `hmn ps`'s
+    /// SPILL column/`spilling` field contract.
+    spilling: Option<bool>,
 }
 
 /// End-of-watch peak/baseline summary for one watched PID.
@@ -1461,8 +1488,9 @@ fn parse_duration(s: &str) -> std::result::Result<Duration, String> {
 }
 
 /// Parse a `--min <SIZE>` (`hmn ps`) / `fits <SIZE>` (`hmn fits`) value:
-/// digits (optionally with one decimal point) followed by an optional
-/// unit (`KiB`, `MiB`, `GiB`) — the exact spellings [`format_vram`]
+/// digits (optionally with a decimal point and more digits) followed
+/// by an optional unit (`KiB`, `MiB`, `GiB`) — the exact spellings
+/// [`format_vram`]
 /// prints, so what the tool shows is always what it accepts back,
 /// including the space `format_vram` always puts before the unit
 /// (`"512 MiB"`, `"8.0 GiB"`) — a `--min "$(hmn ps ... )"`-style copy
@@ -1479,7 +1507,7 @@ fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
     let (number, unit) = trimmed.split_at(split_at);
     if number.is_empty() {
         return Err(format!(
-            "invalid size {s:?}: expected digits (optionally with one decimal point) followed by an optional unit (KiB, MiB, GiB)"
+            "invalid size {s:?}: expected digits (optionally with a decimal point and more digits) followed by an optional unit (KiB, MiB, GiB)"
         ));
     }
     // format_vram always separates the number from the unit with a
@@ -1488,17 +1516,25 @@ fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
     // no-space form.
     let unit = unit.trim_start();
     // Only ASCII digits and `.` ever reach `number` (the split above
-    // excludes everything else), so this can't parse as `inf`/`NaN`/
-    // negative — a plain `Err` on malformed digit grouping (e.g.
-    // "1.2.3") is the only failure mode left to handle.
+    // excludes everything else), so this can't parse as the *literal*
+    // `inf`/`NaN`/negative — but a long enough digit string still
+    // overflows to `f64::INFINITY` (`f64::from_str` saturates rather
+    // than erroring on magnitude overflow), so `is_finite` below is
+    // load-bearing, not defensive filler: without it a fat-fingered
+    // extra digit silently becomes `u64::MAX` instead of a usage error.
     let value: f64 = number
         .parse()
         .map_err(|_| format!("invalid size {s:?}: {number:?} is not a number"))?;
+    if !value.is_finite() {
+        return Err(format!(
+            "invalid size {s:?}: {number:?} is too large to represent"
+        ));
+    }
     let multiplier: u64 = match unit {
         "" => 1,
-        "KiB" => 1024,
-        "MiB" => 1024 * 1024,
-        "GiB" => 1024 * 1024 * 1024,
+        "KiB" => KIB,
+        "MiB" => MIB,
+        "GiB" => GIB,
         other => {
             return Err(format!(
                 "invalid size {s:?}: unknown unit {other:?} (expected KiB, MiB, or GiB)"
@@ -1576,13 +1612,16 @@ fn process_sample(
     elapsed: Duration,
     tracker: Option<&mut SpillTracker>,
 ) -> Vec<WatchSampleRow> {
-    // EXPLICIT: `tracker: None` means no tracker was constructed for this
-    // run (spill unmeasurable / construction failed) — every sample then
-    // reports not-spilling, matching the honest "measurable: false"
-    // contract elsewhere in the crate.
-    let spilling = tracker.is_some_and(|t| {
+    // `None` — not `Some(false)` — when there's no way to tell:
+    // `tracker: None` (construction failed) or this instance isn't
+    // measurable (`SpillTracker::is_measurable`). Matches `hmn ps`'s
+    // `spilling` field contract; a plain `is_some_and` here would
+    // collapse "can't tell" into "measured, not spilling", which is
+    // exactly the misreading that field's honesty promise exists to
+    // prevent.
+    let spilling: Option<bool> = tracker.and_then(|t| {
         t.observe(format!("+{:.1}s", elapsed.as_secs_f64()));
-        t.is_spilling()
+        t.is_measurable().then(|| t.is_spilling())
     });
 
     let mut out = Vec::with_capacity(watched.len());
@@ -1688,9 +1727,16 @@ fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String 
     let dcommit_cells: Vec<String> = rows.iter().map(|r| format_delta(r.used_delta)).collect();
     let shared_cells: Vec<String> = rows.iter().map(|r| format_vram(r.shared_bytes)).collect();
     let dshared_cells: Vec<String> = rows.iter().map(|r| format_delta(r.shared_delta)).collect();
+    // "?" (not "no") for `None` — same "can't tell" convention `hmn
+    // ps`'s SPILL column uses, so an operator never mistakes "not
+    // measurable here" for "measured, not spilling".
     let spill_cells: Vec<&str> = rows
         .iter()
-        .map(|r| if r.spilling { "SPILL" } else { "no" })
+        .map(|r| match r.spilling {
+            Some(true) => "SPILL",
+            Some(false) => "no",
+            None => "?",
+        })
         .collect();
 
     let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
@@ -1749,16 +1795,20 @@ fn format_watch_rows_json(
             || String::from("null"),
             |n| format!("\"{}\"", json_escape(n)),
         );
+        let spilling_json = match row.spilling {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "null",
+        };
         let _ = writeln!(
             out,
-            r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{}}}"#,
+            r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{spilling_json}}}"#,
             duration_ms(elapsed),
             row.pid,
             row.used_bytes,
             row.used_delta,
             row.shared_bytes,
             row.shared_delta,
-            row.spilling,
         );
     }
     out
@@ -2047,11 +2097,18 @@ fn run_watch(
 
     let device_name = device_info(device).ok().and_then(|d| d.name);
 
-    // Captured right before the query, matching the interval loop's
-    // elapsed/wall_clock pairing below (t_ms for this first sample is
-    // the constant Duration::ZERO, but wall_clock should still name
-    // the same instant attach actually happened, not whenever the
-    // first gpu_processes() call happens to return).
+    // `start` (the origin every later t_ms is measured from) and
+    // first_wall_clock are captured together, right before the first
+    // query — not after the resolve_watched_pids/SpillTracker::new/
+    // ctrlc::set_handler setup below, which on Windows includes a real
+    // DXGI walk plus GPU Adapter Memory PDH enumeration and can take
+    // long enough to be visible. Capturing `start` later while
+    // first_wall_clock stayed early would make the very first sample's
+    // wall_clock predate t_ms's own zero point — the first row
+    // reconstructed as `first_wall_clock + t_ms` would land earlier
+    // than it actually happened, and every later row's gap from it
+    // would read larger than `--interval`.
+    let start = std::time::Instant::now();
     let first_wall_clock = SystemTime::now();
     let first_rows = match gpu_processes(device) {
         Ok(rows) => rows,
@@ -2107,9 +2164,7 @@ fn run_watch(
     };
     eprintln!(
         "hmn watch: device {device}{}, interval {:.1}s, {mode_clause}",
-        device_name
-            .as_deref()
-            .map_or_else(String::new, |n| format!(" [{n}]")),
+        device_name_suffix(device_name.as_deref()),
         interval.as_secs_f64(),
     );
     if !json {
@@ -2117,7 +2172,6 @@ fn run_watch(
     }
 
     let mut state = WatchState::new();
-    let start = std::time::Instant::now();
 
     let rows0 = process_sample(
         &first_rows,
@@ -2215,10 +2269,16 @@ fn run_watch(
 // -----------------------------------------------------------------------------
 
 /// Run the `fits` subcommand: compare `size` against `device`'s current
-/// free `VRAM` (already net of `reserved_bytes`) and print one line to
-/// stderr either way. Bypasses `main`'s `Ok`/`Err` fold — the exit code
-/// conveys the answer, not `hmn`'s own success/failure — the same
-/// pattern `run_spill`/`run_watch` use.
+/// free `VRAM` and print one line to stderr either way. `free_bytes`
+/// nets out `reserved_bytes` **on the NVML path only** — `DXGI`-alone,
+/// `nvidia-smi`, and Metal backends all leave `reserved_bytes: None`,
+/// and on Windows without NVML `free_bytes` is derived from a
+/// documented per-process *lower bound* on usage (see
+/// [`hypomnesis::device_info`]'s "Imprecision note"), so it can
+/// over-state true free `VRAM` there; on macOS it is `MTLDevice`'s static working-set
+/// budget, not a live gauge. Bypasses `main`'s `Ok`/`Err` fold — the
+/// exit code conveys the answer, not `hmn`'s own success/failure — the
+/// same pattern `run_spill`/`run_watch` use.
 fn run_fits(size: u64, device: u32) -> std::process::ExitCode {
     let info = match device_info(device) {
         Ok(info) => info,
@@ -2229,16 +2289,52 @@ fn run_fits(size: u64, device: u32) -> std::process::ExitCode {
     };
     let fits = size <= info.free_bytes;
     eprintln!(
-        "hmn: {} — {} free {} {} requested (device {device}{})",
-        if fits { "fits" } else { "does not fit" },
-        format_vram(info.free_bytes),
-        if fits { ">=" } else { "<" },
-        format_vram(size),
-        info.name
-            .as_deref()
-            .map_or_else(String::new, |n| format!(" [{n}]")),
+        "{}",
+        format_fits_message(fits, info.free_bytes, size, device, info.name.as_deref())
     );
     std::process::ExitCode::from(fits_exit_code(fits))
+}
+
+/// Build `run_fits`'s stderr line. A separate, testable function
+/// because the two verdict-dependent pieces (the leading word and the
+/// comparison glyph) must never desync — inlined `if fits {...}`
+/// ternaries in an `eprintln!` argument list can drift apart with no
+/// compiler or test catching it. Also states the exact margin via
+/// [`format_vram_precise`], since [`format_vram`]'s one-decimal-place
+/// `free`/`size` figures can independently round to the *same*
+/// displayed string on a near-miss — printing `"12.0 GiB free < 12.0
+/// GiB requested"` reads as self-contradictory even though the
+/// underlying byte counts genuinely differ.
+#[must_use]
+fn format_fits_message(
+    fits: bool,
+    free_bytes: u64,
+    size: u64,
+    device: u32,
+    name: Option<&str>,
+) -> String {
+    let (verdict, cmp) = if fits {
+        ("fits", ">=")
+    } else {
+        ("does not fit", "<")
+    };
+    let margin = if fits {
+        format!(
+            "{} headroom",
+            format_vram_precise(free_bytes.saturating_sub(size))
+        )
+    } else {
+        format!(
+            "short by {}",
+            format_vram_precise(size.saturating_sub(free_bytes))
+        )
+    };
+    format!(
+        "hmn: {verdict} — {} free {cmp} {} requested ({margin}; device {device}{})",
+        format_vram(free_bytes),
+        format_vram(size),
+        device_name_suffix(name),
+    )
 }
 
 /// Map a `fits` boolean to `hmn`'s exit-code contract: `0` if it fits,
@@ -2253,17 +2349,30 @@ const fn fits_exit_code(fits: bool) -> u8 {
 // Formatting primitives
 // -----------------------------------------------------------------------------
 
+/// Binary byte-size ladder, shared by [`bytes_to_mib`], [`format_vram`],
+/// [`format_vram_precise`], and `parse_size_bytes`'s unit table — one
+/// definition of `KiB`/`MiB`/`GiB` instead of several independently
+/// spelled copies, so `hmn`'s display units and the units `--min`/`fits`
+/// accept can't quietly drift apart.
+const KIB: u64 = 1024;
+/// See [`KIB`].
+const MIB: u64 = KIB * 1024;
+/// See [`KIB`].
+const GIB: u64 = MIB * 1024;
+
 /// `MiB` (`bytes / 1_048_576`), rounded down. Used by the device-summary
 /// formatter where `MiB` precision is sufficient.
 const fn bytes_to_mib(bytes: u64) -> u64 {
-    bytes / 1_048_576
+    bytes / MIB
 }
 
 /// Human-readable VRAM string. Renders `MiB` below 1 `GiB`, else `GiB`
-/// to one decimal place.
+/// to one decimal place. Tuned for glanceable table columns — small
+/// values can round to a display figure that doesn't round-trip
+/// exactly; where exact size matters (a size copied back into
+/// `--min`/`fits`, or a comparison two figures are drawn side by
+/// side for) use [`format_vram_precise`] instead.
 fn format_vram(bytes: u64) -> String {
-    const MIB: u64 = 1024 * 1024;
-    const GIB: u64 = MIB * 1024;
     if bytes >= GIB {
         // CAST: u64 → f64, byte count and constant; fits in f64 mantissa
         // for any realistic VRAM size (< 2^53 bytes ≈ 8 PiB).
@@ -2274,6 +2383,39 @@ fn format_vram(bytes: u64) -> String {
         let mib = bytes / MIB;
         format!("{mib} MiB")
     }
+}
+
+/// Precise size string for contexts where [`format_vram`]'s rounding
+/// would mislead — the `hmn ps --min` summary echo and `hmn fits`'s
+/// margin, both of which state or imply an exact comparison.
+/// `format_vram(524_288)` prints `"0 MiB"` (a nonzero value read as
+/// the documented `--min 0` no-op); `format_vram_precise` picks the
+/// largest unit the value actually clears and prints up to two
+/// decimal places, trimming trailing zeros, so `524_288` reads
+/// `"512 KiB"` and nothing nonzero ever displays as `"0"`.
+fn format_vram_precise(bytes: u64) -> String {
+    let (divisor, unit) = [(GIB, "GiB"), (MIB, "MiB"), (KIB, "KiB")]
+        .into_iter()
+        .find(|&(d, _)| bytes >= d)
+        .unwrap_or((1, "B"));
+    if divisor == 1 {
+        return format!("{bytes} B");
+    }
+    // CAST: u64 → f64, byte count and constant; fits in f64 mantissa
+    // for any realistic VRAM size (< 2^53 bytes ≈ 8 PiB).
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    let value = (bytes as f64) / (divisor as f64);
+    let formatted = format!("{value:.2}");
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    format!("{trimmed} {unit}")
+}
+
+/// The ` [name]` suffix rendered after a device index in several
+/// stderr/summary lines (`hmn watch: device 0 [RTX 5060 Ti], ...`,
+/// `hmn: fits ... (device 0 [RTX 5060 Ti])`) — empty string when no
+/// name is available, so callers can splice it in unconditionally.
+fn device_name_suffix(name: Option<&str>) -> String {
+    name.map_or_else(String::new, |n| format!(" [{n}]"))
 }
 
 /// Compute the width of a table column as `max(header.len(),
@@ -2393,6 +2535,96 @@ mod tests {
         // rounding (matches the roadmap example output).
         let bytes_8_2_gib = 8 * one_gib + 200 * 1024 * 1024;
         assert_eq!(format_vram(bytes_8_2_gib), "8.2 GiB");
+    }
+
+    // --- format_vram_precise ---
+
+    #[test]
+    fn format_vram_precise_never_rounds_a_nonzero_value_to_zero() {
+        // The exact bug format_vram has: 512 KiB is well under 1 MiB,
+        // so format_vram(524_288) == "0 MiB" — indistinguishable from
+        // the documented --min 0 no-op.
+        assert_eq!(format_vram_precise(524_288), "512 KiB");
+        assert_eq!(format_vram_precise(0), "0 B");
+        assert_eq!(format_vram_precise(1), "1 B");
+        assert_eq!(format_vram_precise(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_vram_precise_exact_tier_values_trim_trailing_zeros() {
+        assert_eq!(format_vram_precise(50 * MIB), "50 MiB");
+        assert_eq!(format_vram_precise(12 * GIB), "12 GiB");
+        assert_eq!(format_vram_precise(KIB), "1 KiB");
+    }
+
+    #[test]
+    fn format_vram_precise_disambiguates_a_format_vram_near_miss() {
+        // format_vram(12_873_164_472) == format_vram(12 * GIB) ==
+        // "12.0 GiB" for both — the exact hmn-fits self-contradiction
+        // finding. format_vram_precise must show them as different.
+        let a = 12 * GIB;
+        let b = 12_873_164_472_u64;
+        assert_eq!(format_vram(a), format_vram(b));
+        assert_ne!(format_vram_precise(a), format_vram_precise(b));
+    }
+
+    // --- format_fits_message ---
+
+    #[test]
+    fn format_fits_message_fits_shows_headroom() {
+        let msg = format_fits_message(true, 14 * GIB, 12 * GIB, 0, Some("RTX 5060 Ti"));
+        assert_eq!(
+            msg,
+            "hmn: fits — 14.0 GiB free >= 12.0 GiB requested (2 GiB headroom; device 0 [RTX 5060 Ti])"
+        );
+    }
+
+    #[test]
+    fn format_fits_message_does_not_fit_shows_shortfall() {
+        let msg = format_fits_message(false, 12 * GIB, 14 * GIB, 1, None);
+        assert_eq!(
+            msg,
+            "hmn: does not fit — 12.0 GiB free < 14.0 GiB requested (short by 2 GiB; device 1)"
+        );
+    }
+
+    #[test]
+    fn format_fits_message_near_miss_is_never_self_contradictory() {
+        // The live-reproduced bug: free and size round to the same
+        // GiB-1-decimal string, so the plain comparison alone would
+        // print e.g. "12.0 GiB free < 12.0 GiB requested". The margin
+        // clause must still make it unambiguous.
+        let free = 12 * GIB;
+        let size = 12_873_164_472_u64; // rounds to the same "12.0 GiB" via format_vram
+        assert_eq!(format_vram(free), format_vram(size));
+        let msg = format_fits_message(false, free, size, 0, None);
+        assert!(
+            !msg.contains("short by 0 GiB") && !msg.contains("short by 0 MiB"),
+            "margin must disambiguate the near-miss: {msg}"
+        );
+    }
+
+    #[test]
+    fn format_fits_message_verdict_and_glyph_never_desync() {
+        // A structural guard against exactly the "if fits {...}" /
+        // "if fits {...}" desync finding: the verdict word and the
+        // comparison glyph are read from the SAME function output, so
+        // the source of truth is single, not two independent ternaries.
+        for fits in [true, false] {
+            let msg = format_fits_message(fits, 10, 10, 0, None);
+            let is_fits_verdict = msg.starts_with("hmn: fits");
+            let has_ge_glyph = msg.contains(">=");
+            assert_eq!(is_fits_verdict, fits);
+            assert_eq!(has_ge_glyph, fits);
+        }
+    }
+
+    // --- device_name_suffix ---
+
+    #[test]
+    fn device_name_suffix_some_and_none() {
+        assert_eq!(device_name_suffix(Some("RTX 5060 Ti")), " [RTX 5060 Ti]");
+        assert_eq!(device_name_suffix(None), "");
     }
 
     // --- bytes_to_mib ---
@@ -2697,6 +2929,16 @@ mod tests {
             format_ps_summary(&unprotected_rows(0), None, None, Some(50 * 1024 * 1024)),
             "0 GPU processes found matching min=50 MiB."
         );
+    }
+
+    #[test]
+    fn format_ps_summary_sub_mib_min_filter_is_not_misreported_as_zero() {
+        // Regression: format_ps_summary used to echo --min through
+        // format_vram, so a genuine 512 KiB filter read back as
+        // "min=0 MiB" — indistinguishable from the documented --min 0
+        // no-op, even though rows were actually being hidden.
+        let s = format_ps_summary(&unprotected_rows(0), None, None, Some(512 * 1024));
+        assert_eq!(s, "0 GPU processes found matching min=512 KiB.");
     }
 
     #[test]
@@ -3477,6 +3719,29 @@ mod tests {
         shared_delta: i64,
         spilling: bool,
     ) -> WatchSampleRow {
+        watch_row_opt(
+            pid,
+            name,
+            used,
+            used_delta,
+            shared,
+            shared_delta,
+            Some(spilling),
+        )
+    }
+
+    /// Like [`watch_row`] but with an explicit `Option<bool>` — for the
+    /// "spill not measurable here" (`None`) cases `watch_row`'s plain
+    /// `bool` can't express.
+    fn watch_row_opt(
+        pid: u32,
+        name: Option<&str>,
+        used: u64,
+        used_delta: i64,
+        shared: u64,
+        shared_delta: i64,
+        spilling: Option<bool>,
+    ) -> WatchSampleRow {
         WatchSampleRow {
             pid,
             name: name.map(str::to_owned),
@@ -3538,6 +3803,17 @@ mod tests {
     }
 
     #[test]
+    fn format_watch_rows_text_unmeasurable_spill_renders_question_mark_not_no() {
+        // None (no tracker / not measurable on this platform) must
+        // render distinctly from Some(false) ("no") — same "?, never
+        // no" convention `hmn ps`'s SPILL column uses.
+        let r = watch_row_opt(1, Some("py.exe"), 0, 0, 0, 0, None);
+        let s = format_watch_rows_text(Duration::ZERO, &[r]);
+        assert!(s.contains('?'));
+        assert!(!s.contains("no"));
+    }
+
+    #[test]
     fn format_watch_rows_text_missing_name_renders_question_mark() {
         let r = watch_row(99, None, 0, 0, 0, 0, false);
         let s = format_watch_rows_text(Duration::ZERO, &[r]);
@@ -3570,6 +3846,13 @@ mod tests {
         let r = watch_row(7, None, 0, 0, 0, 0, false);
         let s = format_watch_rows_json(Duration::ZERO, SystemTime::UNIX_EPOCH, &[r]);
         assert!(s.contains(r#""name":null,"#));
+    }
+
+    #[test]
+    fn format_watch_rows_json_unmeasurable_spilling_is_null_not_false() {
+        let r = watch_row_opt(7, Some("py.exe"), 0, 0, 0, 0, None);
+        let s = format_watch_rows_json(Duration::ZERO, SystemTime::UNIX_EPOCH, &[r]);
+        assert!(s.contains(r#""spilling":null"#));
     }
 
     #[test]
@@ -3681,7 +3964,9 @@ mod tests {
         assert_eq!(row.used_bytes, 8_000);
         assert_eq!(row.used_delta, 0);
         assert_eq!(row.shared_delta, 0);
-        assert!(!row.spilling);
+        // tracker: None (construction failed/not passed) means "can't
+        // tell", not "measured, not spilling".
+        assert_eq!(row.spilling, None);
     }
 
     #[cfg(feature = "test-helpers")]

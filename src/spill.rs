@@ -176,22 +176,34 @@ pub const DEFAULT_SHARED_GROWTH_BYTES: u64 = 256 * 1024 * 1024;
 /// tools like `hmn ps` that only ever see one snapshot.
 ///
 /// Returns `None` when spill cannot be measured at all — non-Windows,
-/// pre-`WDDM 2.0`, a non-NVIDIA adapter, or a live `PDH` sample
-/// failure — never collapsed into `Some(false)`, so a caller can
-/// always tell "definitely not spilling" from "cannot tell". Succeeds
-/// on every platform (the `None` cases above are not errors);
-/// portable consumers need no `cfg`, matching [`SpillTracker::new`].
+/// built without the `pdh` feature, pre-`WDDM 2.0`, `device_index`
+/// resolving to no adapter, a non-NVIDIA adapter, `PdhOpenQueryW`
+/// failing, a live `PDH` sample failing, or the adapter's dedicated
+/// capacity coming back unknown/unassessable (including the narrow
+/// case where `AdapterMemQuery`'s capacity read — a second,
+/// independent query from the one that resolves `device_index` to an
+/// adapter — fails on its own, e.g. a `TDR`/driver reset landing
+/// between the two). **Never** collapsed into `Some(false)`: every one
+/// of those cases returns `None`, so a caller can always tell
+/// "definitely not spilling" from "cannot tell". Succeeds on every
+/// platform (the `None` cases above are not errors — this function has
+/// no separate error return, unlike [`SpillTracker::new`] on the same
+/// inputs); portable consumers need no `cfg`.
 #[must_use]
 pub fn snapshot_is_spilling(device_index: u32) -> Option<bool> {
     #[cfg(all(windows, feature = "pdh"))]
     {
-        let mut query = crate::gpu::pdh::AdapterMemQuery::open(device_index).ok()??;
-        let sample = query.sample().ok()?;
-        Some(saturated_with_shared_floor(
+        let Ok(Some(mut query)) = crate::gpu::pdh::AdapterMemQuery::open(device_index) else {
+            return None;
+        };
+        let Ok(sample) = query.sample() else {
+            return None;
+        };
+        saturated_with_shared_floor(
             sample.dedicated_bytes,
             sample.shared_bytes,
             sample.limit_bytes,
-        ))
+        )
     }
     #[cfg(not(all(windows, feature = "pdh")))]
     {
@@ -230,21 +242,26 @@ const fn default_dedicated_threshold(limit_bytes: u64) -> Option<u64> {
 /// not only Windows + `pdh`. Mirrors [`fold`]'s two-sided condition
 /// (via the shared [`default_dedicated_threshold`]) with the
 /// growth-over-baseline term replaced by an absolute floor (see
-/// [`snapshot_is_spilling`]'s doc for why). `None` from
-/// `default_dedicated_threshold` — capacity unknown or nonsensically
-/// tiny — always returns `false`, matching `fold`'s handling of the
-/// same case.
+/// [`snapshot_is_spilling`]'s doc for why).
+///
+/// Returns `None`, not `Some(false)`, when `default_dedicated_threshold`
+/// can't assess saturation (capacity unknown or nonsensically tiny) —
+/// unlike `fold`, whose callers have `SpillReport.measurable` as a
+/// separate escape hatch, this function's `Option` is
+/// [`snapshot_is_spilling`]'s *only* signal for "cannot tell", so an
+/// unassessable threshold must surface here, not get silently read as
+/// "assessed, and not spilling".
 #[cfg(any(all(windows, feature = "pdh"), test))]
 #[must_use]
 const fn saturated_with_shared_floor(
     dedicated_bytes: u64,
     shared_bytes: u64,
     limit_bytes: u64,
-) -> bool {
+) -> Option<bool> {
     let Some(threshold) = default_dedicated_threshold(limit_bytes) else {
-        return false;
+        return None;
     };
-    dedicated_bytes >= threshold && shared_bytes >= DEFAULT_SHARED_GROWTH_BYTES
+    Some(dedicated_bytes >= threshold && shared_bytes >= DEFAULT_SHARED_GROWTH_BYTES)
 }
 
 /// One contiguous stretch of spilling observations.
@@ -1177,51 +1194,53 @@ mod tests {
     #[test]
     fn saturated_with_shared_floor_below_dedicated_threshold_never_spills() {
         // Shared far past the floor, but dedicated below 85% of LIMIT.
-        assert!(!saturated_with_shared_floor(RELAXED, SPILLED_SHARED, LIMIT));
+        assert_eq!(
+            saturated_with_shared_floor(RELAXED, SPILLED_SHARED, LIMIT),
+            Some(false)
+        );
     }
 
     #[test]
     fn saturated_with_shared_floor_below_shared_floor_never_spills() {
         // Dedicated saturated, but shared below DEFAULT_SHARED_GROWTH_BYTES.
-        assert!(!saturated_with_shared_floor(
-            SATURATED,
-            DEFAULT_SHARED_GROWTH_BYTES - 1,
-            LIMIT
-        ));
+        assert_eq!(
+            saturated_with_shared_floor(SATURATED, DEFAULT_SHARED_GROWTH_BYTES - 1, LIMIT),
+            Some(false)
+        );
     }
 
     #[test]
     fn saturated_with_shared_floor_both_sides_met_spills() {
-        assert!(saturated_with_shared_floor(
-            SATURATED,
-            DEFAULT_SHARED_GROWTH_BYTES,
-            LIMIT
-        ));
+        assert_eq!(
+            saturated_with_shared_floor(SATURATED, DEFAULT_SHARED_GROWTH_BYTES, LIMIT),
+            Some(true)
+        );
     }
 
     #[test]
-    fn saturated_with_shared_floor_zero_limit_never_spills() {
-        assert!(!saturated_with_shared_floor(u64::MAX, u64::MAX, 0));
+    fn saturated_with_shared_floor_zero_limit_is_unassessable() {
+        // limit_bytes 0 means "capacity unknown" — None (cannot tell),
+        // never Some(false) ("measured, not spilling"). This is the
+        // exact honesty guarantee snapshot_is_spilling's doc promises.
+        assert_eq!(saturated_with_shared_floor(u64::MAX, u64::MAX, 0), None);
     }
 
     #[test]
-    fn saturated_with_shared_floor_sub_100_byte_limit_never_spills() {
-        assert!(!saturated_with_shared_floor(u64::MAX, u64::MAX, 99));
+    fn saturated_with_shared_floor_sub_100_byte_limit_is_unassessable() {
+        assert_eq!(saturated_with_shared_floor(u64::MAX, u64::MAX, 99), None);
     }
 
     #[test]
     fn saturated_with_shared_floor_dedicated_threshold_boundary() {
         let threshold = LIMIT / 100 * DEFAULT_DEDICATED_THRESHOLD_PCT;
-        assert!(saturated_with_shared_floor(
-            threshold,
-            DEFAULT_SHARED_GROWTH_BYTES,
-            LIMIT
-        ));
-        assert!(!saturated_with_shared_floor(
-            threshold - 1,
-            DEFAULT_SHARED_GROWTH_BYTES,
-            LIMIT
-        ));
+        assert_eq!(
+            saturated_with_shared_floor(threshold, DEFAULT_SHARED_GROWTH_BYTES, LIMIT),
+            Some(true)
+        );
+        assert_eq!(
+            saturated_with_shared_floor(threshold - 1, DEFAULT_SHARED_GROWTH_BYTES, LIMIT),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1235,7 +1254,10 @@ mod tests {
         let dedicated = 14_019 * MIB; // 13.69 GiB
         let limit = 16_056 * MIB; // 15.68 GiB
         let shared = 174 * MIB;
-        assert!(!saturated_with_shared_floor(dedicated, shared, limit));
+        assert_eq!(
+            saturated_with_shared_floor(dedicated, shared, limit),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1249,7 +1271,10 @@ mod tests {
         let dedicated = 14_643 * MIB; // 14.3 GiB
         let limit = 16_691 * MIB; // 16.3 GiB
         let shared = 6_963 * MIB; // 6.8 GiB
-        assert!(saturated_with_shared_floor(dedicated, shared, limit));
+        assert_eq!(
+            saturated_with_shared_floor(dedicated, shared, limit),
+            Some(true)
+        );
     }
 
     #[test]

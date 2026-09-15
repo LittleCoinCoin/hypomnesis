@@ -381,12 +381,12 @@ one command, gateable from a run script, instead of a hand-rolled
 
 ```sh
 $ hmn fits 1GiB
-hmn: fits — 13.9 GiB free >= 1.0 GiB requested (device 0 [NVIDIA GeForce RTX 5060 Ti])
+hmn: fits — 13.8 GiB free >= 1.0 GiB requested (12.75 GiB headroom; device 0 [NVIDIA GeForce RTX 5060 Ti])
 $ echo $?
 0
 
 $ hmn fits 999GiB
-hmn: does not fit — 13.9 GiB free < 999.0 GiB requested (device 0 [NVIDIA GeForce RTX 5060 Ti])
+hmn: does not fit — 13.8 GiB free < 999.0 GiB requested (short by 985.25 GiB; device 0 [NVIDIA GeForce RTX 5060 Ti])
 $ echo $?
 1
 ```
@@ -395,11 +395,20 @@ $ echo $?
 
 Exits **`0`** if `SIZE` fits in the target device's current free `VRAM`
 (`--device`, default `0`), **`1`** if it doesn't, **`2`** on a hard error (bad
-device) — deliberately parallel to `hmn watch`'s `0`/`1`/`2` contract.
-Compares against `free_bytes`, which already nets out `reserved_bytes` (see
-[Why does `used_bytes` exceed my card's total VRAM?](docs/FAQ.md#why-does-used_bytes-exceed-my-cards-total-vram)).
+device) — deliberately parallel to `hmn watch`'s `0`/`1`/`2` contract. The
+message always states an exact headroom/shortfall margin alongside the
+rounded `free`/`requested` figures, so a near-miss where both round to the
+same display string (e.g. `"12.0 GiB free < 12.0 GiB requested"`) still
+reads unambiguously. `free_bytes` nets out `reserved_bytes` **on the NVML
+path only** (see
+[Why does `used_bytes` exceed my card's total VRAM?](docs/FAQ.md#why-does-used_bytes-exceed-my-cards-total-vram));
+on the Windows `DXGI`-alone fallback it can over-state true free `VRAM`
+(a documented per-process lower bound on usage), and on macOS it's a
+static working-set budget, not a live gauge — `hmn fits` is exact on the
+common NVML/Windows path this was built and verified against, with those
+two narrower platform caveats.
 `SIZE` uses the same syntax as `hmn ps --min` (see [`hmn`](#binary-hmn), above):
-a bare byte count, or a number (optionally one decimal place) with
+a bare byte count, or a decimal number with
 `KiB`/`MiB`/`GiB`. No `--json` — the point is a scriptable exit code, not
 structured output:
 
