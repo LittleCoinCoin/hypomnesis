@@ -106,11 +106,20 @@ SHARED column of `hmn ps` (the same quantity as Task Manager's
 
 ```
 $ hmn ps
-PID    NAME         VRAM      SHARED   DEVICE
-21844  python.exe   15.8 GiB  2.9 GiB  NVIDIA GeForce RTX 5060 Ti
-3524   firefox.exe  866 MiB   25 MiB   NVIDIA GeForce RTX 5060 Ti
+PID    NAME         VRAM      SHARED   DEVICE                      SPILL
+21844  python.exe   15.8 GiB  2.9 GiB  NVIDIA GeForce RTX 5060 Ti  SPILL
+3524   firefox.exe  866 MiB   25 MiB   NVIDIA GeForce RTX 5060 Ti  SPILL
 ...
 ```
+
+The SPILL column (since v0.2.11) is a *single-snapshot* approximation of this
+same co-condition — no baseline to measure growth against, so both rows read
+`SPILL` here once the adapter as a whole is saturated with shared residency
+above the floor, even though `firefox.exe`'s own 25 MiB is the benign
+baseline, not its own contribution to the spill. It's a glance-level triage
+signal, not a per-process verdict; see
+[the FAQ entry](../FAQ.md#why-is-the-hmn-ps-spill-column-sometimes-null-and-how-does-it-differ-from-hmn-watch)
+for the exact distinction from this walkthrough's adapter-wide report.
 
 Scriptable — watch one PID's shared residency from outside (a watchdog keyed
 off **this** field, never off commit, both false-alarms less *and* catches the
