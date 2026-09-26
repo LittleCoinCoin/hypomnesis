@@ -26,3 +26,14 @@ pub fn spillforge_path() -> PathBuf {
     );
     path
 }
+
+/// The closing `{"kind":"summary",...}` line of an `hmn watch --json`
+/// capture. Panics with the whole capture if there is none — a watch
+/// that ended without its summary is itself the failure to report.
+#[allow(clippy::panic)] // test-only
+pub fn summary_line(stdout: &str) -> &str {
+    stdout
+        .lines()
+        .find(|l| l.contains(r#""kind":"summary""#))
+        .unwrap_or_else(|| panic!("no summary line in hmn watch --json output:\n{stdout}"))
+}

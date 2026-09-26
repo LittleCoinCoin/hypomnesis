@@ -21,7 +21,7 @@
 
 mod common;
 
-use common::spillforge_path;
+use common::{spillforge_path, summary_line};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ use std::time::Duration;
 /// dogfooding report found).
 #[test]
 #[ignore = "requires Windows + WDDM 2.0+ GPU and a prebuilt spillforge fixture"]
-#[allow(clippy::expect_used, clippy::panic)] // test-only
+#[allow(clippy::expect_used)] // test-only
 fn hmn_watch_follow_new_tracks_two_sequential_spillforge_runs() {
     // A real spillforge run commits well into double-digit GiB; 5 GiB is
     // a generous floor that rejects a stray 0-byte / desktop-scale
@@ -86,10 +86,7 @@ fn hmn_watch_follow_new_tracks_two_sequential_spillforge_runs() {
         .expect("failed to wait on hmn watch");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let summary_line = stdout
-        .lines()
-        .find(|l| l.contains(r#""kind":"summary""#))
-        .unwrap_or_else(|| panic!("no summary line in hmn watch --json output:\n{stdout}"));
+    let summary_line = summary_line(&stdout);
 
     assert!(
         summary_line.contains(r#""measurable":true"#),

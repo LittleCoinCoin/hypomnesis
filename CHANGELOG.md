@@ -210,7 +210,9 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   behaviour change.
 - **The live tests' `spillforge_path` helper is shared** (`tests/common/mod.rs`) — with
   `tests/live_watch_filter.rs` it had reached three identical copies; `tests/live_watch.rs`,
-  `live_watch_follow_new.rs` and `live_watch_filter.rs` now pull it in with `mod common;`.
+  `live_watch_follow_new.rs` and `live_watch_filter.rs` now pull it in with `mod common;`. The
+  summary-line lookup the audit flagged beside it (also three copies) moved there too, as
+  `summary_line`, and the three tests' now-dead `clippy::panic` allows went with it.
 
 ### Fixed
 

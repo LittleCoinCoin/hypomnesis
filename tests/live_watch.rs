@@ -26,7 +26,7 @@
 
 mod common;
 
-use common::spillforge_path;
+use common::{spillforge_path, summary_line};
 use std::process::{Command, Stdio};
 
 /// End-to-end acceptance test: `hmn watch <pid>` attached to a live,
@@ -37,7 +37,7 @@ use std::process::{Command, Stdio};
 /// spill — not a mock.
 #[test]
 #[ignore = "requires Windows + WDDM 2.0+ GPU and a prebuilt spillforge fixture"]
-#[allow(clippy::expect_used, clippy::panic)] // test-only
+#[allow(clippy::expect_used)] // test-only
 fn hmn_watch_reports_spill_against_spillforge() {
     // 20 GiB working set (spillforge's own default), 20 s churn — long
     // enough that hmn watch's short interval below reliably samples
@@ -71,10 +71,7 @@ fn hmn_watch_reports_spill_against_spillforge() {
     let _ = spillforge.wait();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let summary_line = stdout
-        .lines()
-        .find(|l| l.contains(r#""kind":"summary""#))
-        .unwrap_or_else(|| panic!("no summary line in hmn watch --json output:\n{stdout}"));
+    let summary_line = summary_line(&stdout);
 
     assert!(
         summary_line.contains(r#""measurable":true"#),

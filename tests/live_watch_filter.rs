@@ -22,7 +22,7 @@
 
 mod common;
 
-use common::spillforge_path;
+use common::{spillforge_path, summary_line};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -34,7 +34,7 @@ use std::time::Duration;
 /// must be the `start` record naming the filter.
 #[test]
 #[ignore = "requires Windows + WDDM 2.0+ GPU and a prebuilt spillforge fixture"]
-#[allow(clippy::expect_used, clippy::panic)] // test-only
+#[allow(clippy::expect_used)] // test-only
 fn hmn_watch_filter_records_only_the_named_workload() {
     let watch = Command::new(env!("CARGO_BIN_EXE_hmn"))
         .args([
@@ -99,11 +99,7 @@ fn hmn_watch_filter_records_only_the_named_workload() {
         );
     }
 
-    let summary = lines
-        .iter()
-        .copied()
-        .find(|l| l.contains(r#""kind":"summary""#))
-        .unwrap_or_else(|| panic!("no summary line in hmn watch --json output:\n{stdout}"));
+    let summary = summary_line(&stdout);
     let per_pid_names = summary.matches(r#""name":"#).count();
     let spillforge_names = summary.matches(r#""name":"spillforge.exe""#).count();
     assert!(
