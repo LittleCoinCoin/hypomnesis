@@ -230,7 +230,8 @@ impl Snapshot {
     /// a fresh `IDXGIFactory1` walk). This adds a few milliseconds of
     /// overhead per call — fine for occasional sampling around training
     /// steps or model loads, less ideal for tight per-frame polling. A
-    /// long-lived `NVML` context is planned for v0.2.
+    /// long-lived `NVML` context is a speculative later-release item,
+    /// tracked in `ROADMAP.md`.
     ///
     /// # Per-process vs device-wide
     ///

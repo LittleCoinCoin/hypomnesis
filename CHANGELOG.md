@@ -53,6 +53,26 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   adapter while the per-index lookups aborted on it. Failures on the *matched* adapter itself
   (`IDXGIAdapter3` cast, `QueryVideoMemoryInfo`) still return `None`, as before. Audit item 3/9.
 
+### Documentation
+
+- **`MemoryReport` says what its `MB` means** (`src/report.rs`, `README.md`) — `ram_delta_mb`,
+  `vram_delta_mb`, `format_delta` and `format_before_after` report and print `MiB`
+  (`bytes / 1_048_576`) under an `MB` label kept for `candle-mi` parity. Every other `report`
+  surface (`Snapshot::ram_mb`, the three `GpuDeviceInfo` formatters) already said so; these four
+  now do too, as does the README's feature table. Names and output unchanged. Audit item 4/9.
+- **Stale forward reference** (`src/snapshot.rs`) — `Snapshot::now`'s rustdoc still promised a
+  long-lived `NVML` context "for v0.2", nine releases into 0.2.x; it now points at `ROADMAP.md`,
+  where the item is speculative. Closes the half of the 2026-08-17 audit's item 3.4 that remained.
+- **`test-helpers` manifest comment names all three builders** (`Cargo.toml`) — it named only
+  `GpuDeviceInfoBuilder`; `GpuProcessEntryBuilder` and `SpillReportBuilder` are exposed too.
+  Closes the 2026-08-17 audit's item 3.5.
+- **`CHANGELOG.md` link references** — the bracketed version headings now resolve to GitHub
+  compare views, as Keep a Changelog intends. Closes the 2026-08-17 audit's item 3.6.
+- **`tests/live_watch_follow_new.rs`** — the comment justifying the duplicated `spillforge_path()`
+  helper claimed Cargo has no lightweight way to share test helpers; `tests/common/mod.rs` is
+  exactly that. The comment now names it and gives the real reason for not using it yet. Audit
+  item 4/9.
+
 ## [0.2.11] - 2026-09-15
 
 Driven by a candle-mi dogfooding report
@@ -477,3 +497,19 @@ function bodies are placeholders that compile and pass clippy under
 - **`docs/hypomnesis-brief.md`** — design document with v0.1 scope, settled-decisions section, and three-phase roadmap (Phase 1 = extraction, Phase 2 = `hf-fetch-model` adopts, Phase 3 = `candle-mi` migrates).
 - **`README.md`** — project overview with badges (CI, crates.io, docs.rs, MSRV, license, unsafe-deny, NVIDIA NVML+DXGI), install, usage, capability matrix, feature flags, license, and development conventions. Mirrors the structure used in [`anamnesis/README.md`](https://github.com/PCfVW/anamnesis/blob/main/README.md).
 - **`[package.metadata.docs.rs]`** — docs.rs builds with `all-features = true` and targets both `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, exposing the Windows-only `dxgi` module on docs.rs alongside the cross-platform `nvml` path.
+
+[Unreleased]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.10...v0.2.11
+[0.2.10]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/mi-for-the-rust-of-us/hypomnesis/releases/tag/v0.0.1

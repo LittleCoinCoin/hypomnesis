@@ -35,6 +35,9 @@ impl MemoryReport {
     }
 
     /// `RAM` delta in megabytes (positive = increased; signed).
+    ///
+    /// `MB` here means `MiB` (`bytes / 1_048_576`), matching
+    /// [`Snapshot::ram_mb`]; the name is kept for `candle-mi` parity.
     #[must_use]
     pub fn ram_delta_mb(&self) -> f64 {
         self.after.ram_mb() - self.before.ram_mb()
@@ -43,6 +46,8 @@ impl MemoryReport {
     /// Per-process `VRAM` delta in megabytes (positive = increased; signed).
     ///
     /// Returns `None` if either snapshot lacks per-process `VRAM` data.
+    /// `MB` here means `MiB` (`bytes / 1_048_576`), matching
+    /// [`Snapshot::vram_mb`]; the name is kept for `candle-mi` parity.
     #[must_use]
     pub fn vram_delta_mb(&self) -> Option<f64> {
         // The second arm reads as: "either the second element is None
@@ -62,6 +67,8 @@ impl MemoryReport {
     ///
     /// Format: `  <label>: RAM <±N> MB  |  VRAM <±M> MB [per-process|device-wide]\n`.
     /// The `VRAM` segment is omitted when [`Self::vram_delta_mb`] is `None`.
+    /// `MB` here means `MiB` (`bytes / 1_048_576`); the label is kept
+    /// verbatim for `candle-mi` parity.
     ///
     /// Suitable for log frameworks (`tracing::info!("{}", r.format_delta("step 1"))`)
     /// or capture into a buffer. [`Self::print_delta`] delegates here.
@@ -82,6 +89,8 @@ impl MemoryReport {
     /// Line 1: `  <label>: RAM <a> MB → <b> MB (<±delta> MB)\n`.
     /// Line 2 (only when both snapshots have `VRAM` data):
     /// `  <label>: VRAM <a> MB → <b> MB (<±delta> MB[ / <total> MB]) [qualifier][ [adapter name]]\n`.
+    /// `MB` here means `MiB` (`bytes / 1_048_576`) throughout; the label is
+    /// kept verbatim for `candle-mi` parity.
     ///
     /// Suitable for log frameworks or file output.
     /// [`Self::print_before_after`] delegates here.

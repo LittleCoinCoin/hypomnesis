@@ -78,9 +78,10 @@ debug-output = []
 # `cargo add hypomnesis --no-default-features --features nvml,dxgi,pdh`.
 # `ctrlc` backs `hmn watch`'s graceful Ctrl+C closing summary.
 cli = ["dep:clap", "dep:ctrlc"]
-# `test-helpers` exposes a `GpuDeviceInfoBuilder` for downstream tests
-# that need synthetic fixtures of the `#[non_exhaustive]` `GpuDeviceInfo`
-# type. Default-off, additive — production code must never enable it.
+# `test-helpers` exposes builders — `GpuDeviceInfoBuilder`,
+# `GpuProcessEntryBuilder`, `SpillReportBuilder` — for downstream tests
+# that need synthetic fixtures of those `#[non_exhaustive]` types.
+# Default-off, additive — production code must never enable it.
 test-helpers = []
 
 [[example]]

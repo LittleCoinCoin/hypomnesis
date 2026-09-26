@@ -43,7 +43,7 @@ contract only after a parity test guards the first four.
 | 1 | Four-way `SpillReport` JSON key-parity test | test only | ✅ |
 | 2 | `spill_cell()`; `GpuDeviceInfo::name_suffix()` / `bytes_as_mib()` | refactor | ✅ |
 | 3 | `DXGI` walks skip a bad adapter instead of aborting (4 remaining walks) | **fix** | ✅ |
-| 4 | Docs-only: stale forward reference, `test-helpers` comment, `CHANGELOG` link references, `MemoryReport` MiB note, `tests/common` comment, `spill_condition` roadmap entry | docs | ⏳ |
+| 4 | Docs-only: stale forward reference, `test-helpers` comment, `CHANGELOG` link references, `MemoryReport` MiB note, `tests/common` comment (the `spill_condition` roadmap rewording was withdrawn — see below) | docs | ✅ |
 | 5 | `run_smi()` (`nvidia-smi`) and `open_query()` / `target_luid()` (`PDH`) | refactor | ⏳ |
 | 6 | One `SpillReport` JSON field writer replacing four spellings | refactor | ⏳ |
 | 7 | Split `src/bin/hmn.rs` per subcommand into `src/bin/hmn/` | refactor | ⏳ |
@@ -60,6 +60,14 @@ Design decisions taken before starting, and why:
   frame; an iterator would hand owned COM pointers to the caller.
 - **Items 3 and 8 land separately, fix then refactor**, so the one behaviour change in part 1 is
   bisectable on its own and the refactor that follows can be checked as behaviour-preserving.
+
+### Withdrawn on inspection
+
+The audit suggested rewording `ROADMAP.md`'s speculative *"Unified `spill_condition` core"* entry,
+on the grounds that it *"reads as though a duplicate exists"*. Re-read in full while doing item 4,
+the entry is accurate: it already says *"only the dedicated-threshold arithmetic is actually
+shared"*, and its real motivation is letting `snapshot_is_spilling` honour the threshold overrides
+`SpillTracker` exposes — a behaviour question, not a duplication one. Left unchanged.
 
 ### Follow-up observed, not in scope
 

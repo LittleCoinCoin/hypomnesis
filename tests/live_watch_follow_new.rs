@@ -24,11 +24,12 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// Path to the spillforge fixture — see `tests/live_watch.rs`'s copy of
-/// this helper for the full rationale (kept duplicated rather than
-/// shared: these are two independent `#[ignore]`-gated integration test
-/// binaries, and Cargo has no lightweight way to share a helper between
-/// them without a `[lib]`/`dev-dependencies` shim for two lines of
-/// code).
+/// this helper for the full rationale. Kept duplicated rather than
+/// shared on purpose: the standard way to share it would be a
+/// `tests/common/mod.rs` module plus `mod common;` in both files (which
+/// does not become a third test binary), and that is more ceremony than
+/// one short helper is worth. Revisit if these two `#[ignore]`-gated
+/// files start sharing anything larger.
 #[allow(clippy::expect_used, clippy::panic)] // test-only, actionable failure message
 fn spillforge_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
