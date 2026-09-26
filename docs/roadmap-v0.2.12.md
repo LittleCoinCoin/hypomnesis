@@ -251,6 +251,17 @@ live tests' `spillforge_path` helper, now in three copies. By reading, eleven fi
 No behaviour changed: every exact-output test passes unchanged, and `hmn watch --help` is
 byte-identical.
 
+### Found after the consistency pass
+
+- **Linux names were cut to 15 bytes, so `--filter` could not match a long program name.** The
+  Linux listing named `NVML`'s rows from `/proc/<pid>/comm`, which the kernel truncates: the
+  report's own example, `--filter figure13_newline_patch`, would have matched nothing. No gate
+  could see it — the unit tests build rows by hand, and under WSL2 `NVML` returns no per-process
+  rows at all, so the live checks ran on Windows only. Fixed in the library (a new
+  `src/gpu/proc_name.rs`): a `comm` at the limit is extended from the `exe` link's file name, else
+  `argv[0]`'s, when that starts with it. Two tests read the real `/proc` of a long-named process
+  (the test binary itself, and a child started through a symlink) and fail with the fix disabled.
+
 ### At release
 
 - Bump `Cargo.toml` to `0.2.12`; flip this roadmap's status and the dogfooding report's `Status`

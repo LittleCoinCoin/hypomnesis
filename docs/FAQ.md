@@ -261,7 +261,10 @@ What's left renders as one of two honest brackets instead of an anonymous
 The Windows kernel itself (PID 4) renders as `[kernel]`, not `?` or
 `[protected]`, so it never pollutes the count.
 
-**This distinction is Windows-only.** On Linux, an unresolved row means
+**This distinction is Windows-only.** On Linux, names come from
+`/proc/<pid>/comm`; the kernel cuts that to 15 bytes, so since v0.2.12 a
+name at the limit is extended from the `/proc/<pid>/exe` link or `argv[0]`
+when either shows the full one. An unresolved row means
 `/proc/<pid>/comm` was unreadable — usually a genuine cross-user permission
 wall, not a false one the way Windows' old `OpenProcess`-only path was; run
 as the owning user or with `sudo` to resolve it. On macOS, `sudo hmn ps`

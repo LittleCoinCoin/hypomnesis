@@ -150,7 +150,11 @@ pub struct GpuProcessEntry {
     /// OS process ID.
     pub pid: u32,
     /// Process name. `None` when no name source is available — `NVML`
-    /// rows whose `/proc/<pid>/comm` was unreadable. On the Windows
+    /// rows whose `/proc/<pid>/comm` was unreadable. On Linux the name
+    /// is that `comm`, extended past the kernel's 15-byte cut when the
+    /// `/proc/<pid>/exe` link or `argv[0]` shows the full name (since
+    /// v0.2.12; before, a long name such as `figure13_newline_patch`
+    /// was reported as `figure13_newlin`). On the Windows
     /// `PDH` path, `None` from `OpenProcess`-based lookup is followed by
     /// a `Toolhelp32Snapshot` fallback (v0.2.8) that resolves most
     /// remaining cases — including foreign-user / `SYSTEM` processes

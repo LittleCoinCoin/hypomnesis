@@ -214,6 +214,14 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
 
 ### Fixed
 
+- **Linux process names were cut to 15 bytes** (`src/gpu/proc_name.rs`, new) — `NVML` rows took
+  their name from `/proc/<pid>/comm`, which the kernel truncates, so `figure13_newline_patch` was
+  listed as `figure13_newlin` and `hmn watch --filter figure13_newline_patch` could never match
+  it. A `comm` at the limit is now extended from the first longer name that starts with it: the
+  `/proc/<pid>/exe` link's file name (same-user processes), else `argv[0]`'s from
+  `/proc/<pid>/cmdline` (world-readable). Shorter names are unchanged. Found while reviewing
+  part 2: WSL2's `NVML` reports no per-process rows, so this path had never run under `--filter`;
+  two new unit tests read the real `/proc` of a long-named process and fail without the fix.
 - **`DXGI` per-index lookups still aborted the whole adapter walk on one bad adapter**
   (`src/gpu/dxgi.rs`) — v0.2.10 fixed this in `enumerate_non_nvidia` and `device_count`, but four
   more walks with the same shape were missed: `query`, `adapter_name`, `adapter_luid` and

@@ -33,6 +33,11 @@ pub(crate) mod pdh;
 #[cfg(feature = "nvidia-smi-fallback")]
 mod nvidia_smi;
 
+// Linux names for `NVML`'s process rows; see its module docs for why
+// `comm` alone is not enough.
+#[cfg(all(target_os = "linux", feature = "nvml"))]
+mod proc_name;
+
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal;
 
@@ -306,8 +311,9 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 ///
 /// 1. `NVML` (Linux primary). `nvmlDeviceGetComputeRunningProcesses_v3`
 ///    yields `(pid, used_bytes)`; `/proc/<pid>/comm` supplies names on
-///    Linux. Capped at 64 processes per device — the existing `NVML`
-///    stack-buffer size. Per-row sentinel and `used > total` checks
+///    Linux, extended past the kernel's 15-byte cut from the `exe`
+///    link or `argv[0]` when either shows the full name. Capped at 64
+///    processes per device — the existing `NVML` stack-buffer size. Per-row sentinel and `used > total` checks
 ///    mirror the library's other `NVML` consumers; offending rows are
 ///    dropped rather than reported as garbage. Returns compute-only
 ///    processes (active `CUDA` context).
@@ -375,7 +381,8 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 
     // NVML is the primary source on Linux: it answers cleanly there
     // (compute-only, per-process bytes from `nvmlDeviceGetComputeRunningProcesses_v3`,
-    // names via `/proc/<pid>/comm`). On Windows under `WDDM`, NVML's
+    // names via `/proc/<pid>/comm`, extended past its 15-byte cut —
+    // see `proc_name`). On Windows under `WDDM`, NVML's
     // per-process query returns rows with the `u64::MAX` sentinel for
     // every row (R570-driver-class bug); the sentinel filter then
     // produces `Some(vec![])` — an "I succeeded, here's nothing"
@@ -387,7 +394,7 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
         let mut entries: Vec<GpuProcessEntry> = rows
             .into_iter()
             .map(|(pid, used_bytes)| {
-                let name = read_proc_comm(pid);
+                let name = proc_name::read_proc_name(pid);
                 GpuProcessEntry {
                     pid,
                     name,
@@ -508,28 +515,6 @@ fn resolve_unresolved_windows_names(entries: &mut [GpuProcessEntry]) {
                 entry.name = Some("[protected]".to_owned());
             }
         }
-    }
-}
-
-/// Read `/proc/<pid>/comm` (Linux only), returning the trimmed
-/// executable name if available.
-///
-/// `/proc/<pid>/comm` is a one-line file containing the process's
-/// `comm` (executable name, truncated to 15 characters by the kernel),
-/// terminated by a newline. World-readable on standard kernels;
-/// returns `None` on any read or trim failure (process exited, perms
-/// stripped, etc.) since name resolution is best-effort.
-#[cfg(all(target_os = "linux", feature = "nvml"))]
-fn read_proc_comm(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/comm");
-    let content = std::fs::read_to_string(&path).ok()?;
-    // BORROW: trim_end_matches + to_owned — kernel writes a trailing
-    // newline; we want an owned String without it.
-    let trimmed = content.trim_end_matches('\n').trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
     }
 }
 
