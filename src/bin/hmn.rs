@@ -4399,6 +4399,113 @@ mod tests {
         assert!(s.contains(r#""per_pid":[]"#));
     }
 
+    // --- SpillReport JSON field-block parity across every emitter ---
+    //
+    // The adapter-level `SpillReport` object is emitted by `hmn spill
+    // --json` (measurable, and the no-tracker fallback) and embedded in
+    // `hmn watch --json`'s closing summary (measurable, and the
+    // no-tracker fallback). The shape tests above pin only each
+    // string's ends; these pin the whole ordered key list, so a field
+    // added to, renamed in, or reordered in one emitter but not the
+    // others fails here instead of silently diverging on the wire.
+
+    /// The canonical ordered key list of the adapter-level `SpillReport`
+    /// JSON object — the one place a new field must be added first.
+    const SPILL_REPORT_JSON_KEYS: [&str; 9] = [
+        "measurable",
+        "spilled",
+        "observations",
+        "baseline_shared_bytes",
+        "peak_shared_bytes",
+        "peak_dedicated_bytes",
+        "dedicated_limit_bytes",
+        "total_spill_duration_ms",
+        "episodes",
+    ];
+
+    /// Top-level keys of one JSON object, in emission order. Tracks
+    /// string/escape state and `{`/`[` nesting depth, so keys inside
+    /// nested values (`episodes[]`, `per_pid[]`) are excluded. Only as
+    /// strict as the hand-rolled emitters it checks — the `cli` feature
+    /// deliberately has no `serde` dependency to parse with.
+    fn top_level_json_keys(json: &str) -> Vec<&str> {
+        let mut keys = Vec::new();
+        let mut depth = 0_usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut string_start = 0_usize;
+        let mut last_string: Option<&str> = None;
+        for (i, c) in json.char_indices() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    in_string = false;
+                    last_string = json.get(string_start..i);
+                }
+                continue;
+            }
+            match c {
+                '"' => {
+                    in_string = true;
+                    string_start = i + 1;
+                }
+                '{' | '[' => depth += 1,
+                '}' | ']' => depth = depth.saturating_sub(1),
+                ':' if depth == 1 => keys.extend(last_string.take()),
+                // EXPLICIT: digits, commas, literals and whitespace carry
+                // no key information at any depth.
+                _ => {}
+            }
+        }
+        keys
+    }
+
+    /// A summary object's adapter-level keys: its top-level keys minus
+    /// `watch`'s own `kind` tag and `per_pid` array.
+    fn spill_report_keys(json: &str) -> Vec<&str> {
+        top_level_json_keys(json)
+            .into_iter()
+            .filter(|k| *k != "kind" && *k != "per_pid")
+            .collect()
+    }
+
+    #[test]
+    fn top_level_json_keys_skips_nested_keys_and_string_contents() {
+        let json = r#"{"a":1,"b":[{"c":2}],"d":{"e":"x:\"y\""},"f":"g"}"#;
+        assert_eq!(top_level_json_keys(json), ["a", "b", "d", "f"]);
+    }
+
+    #[test]
+    fn spill_json_unmeasurable_fallbacks_share_the_canonical_keys() {
+        // `hmn spill` with no tracker, and `hmn watch` with no tracker.
+        assert_eq!(
+            spill_report_keys(SPILL_JSON_UNMEASURABLE),
+            SPILL_REPORT_JSON_KEYS
+        );
+        let watch = format_watch_summary_json(None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
+        assert_eq!(spill_report_keys(&watch), SPILL_REPORT_JSON_KEYS);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn spill_json_measurable_emitters_share_the_canonical_keys() {
+        // `spilling_report()` carries two episodes and the watch summary
+        // a non-empty per_pid, so nested keys are present to be excluded.
+        let report = spilling_report();
+        assert_eq!(
+            spill_report_keys(&format_spill_json(&report)),
+            SPILL_REPORT_JSON_KEYS
+        );
+        let watch = format_watch_summary_json(
+            Some(&report),
+            &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)],
+        );
+        assert_eq!(spill_report_keys(&watch), SPILL_REPORT_JSON_KEYS);
+    }
+
     // --- Watch clap arg parsing ---
 
     #[test]

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Part 1 of v0.2.12 remediates the nine items of the
+[2026-09-26 duplicate-code audit](docs/audits/2026-09-26-duplicate-code-audit.md), one commit
+each, before part 2 implements a candle-mi dogfooding report's identity-based `hmn watch`
+selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
+
+### Added
+
+- **Tests — `SpillReport` JSON key parity across every emitter** (`src/bin/hmn.rs`) — the
+  adapter-level `SpillReport` object is spelled out by four independent emitters (`hmn spill
+  --json` measurable and no-tracker, `hmn watch --json` summary measurable and no-tracker), and
+  the existing shape tests pinned only each string's first fields and last. Three new tests pin
+  the whole ordered key list against one canonical `SPILL_REPORT_JSON_KEYS`, via a test-only
+  depth-aware key scanner that ignores nested `episodes[]` / `per_pid[]` keys (itself tested).
+  Verified to discriminate: swapping two middle keys in one emitter, or renaming one, fails the
+  new tests while every pre-existing test still passes. Audit item 1/9.
+
 ## [0.2.11] - 2026-09-15
 
 Driven by a candle-mi dogfooding report

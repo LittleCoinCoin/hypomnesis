@@ -40,7 +40,7 @@ contract only after a parity test guards the first four.
 
 | # | Item | Kind | Status |
 |---|---|---|---|
-| 1 | Four-way `SpillReport` JSON key-parity test | test only | ⏳ |
+| 1 | Four-way `SpillReport` JSON key-parity test | test only | ✅ |
 | 2 | `spill_cell()`; `GpuDeviceInfo` `name_suffix()` / `mib()` | refactor | ⏳ |
 | 3 | `DXGI` walks skip a bad adapter instead of aborting (4 remaining walks) | **fix** | ⏳ |
 | 4 | Docs-only: stale forward reference, `test-helpers` comment, `CHANGELOG` link references, `MemoryReport` MiB note, `tests/common` comment, `spill_condition` roadmap entry | docs | ⏳ |
