@@ -271,7 +271,8 @@ byte-identical.
 
 - Bump `Cargo.toml` to `0.2.12`; flip this roadmap's status and the dogfooding report's `Status`
   line (`✅ Resolved in v0.2.12`), per the dogfooding style guide.
-- Rotate the README's "what's new" banner (new 🆕, previous to 🚀, drop the oldest of three).
+- ~~Rotate the README's "what's new" banner~~ — done ahead of release: 🆕 `0.2.12`, `0.2.11` to
+  🚀, `0.2.9` dropped.
 - Refresh the `start`-record sample in the watch tutorial's Step 5, captured from a pre-release
   build and so reading `"hmn_version":"0.2.11"`.
 
