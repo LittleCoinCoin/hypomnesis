@@ -30,7 +30,6 @@ use std::time::Duration;
 /// does not become a third test binary), and that is more ceremony than
 /// one short helper is worth. Revisit if these two `#[ignore]`-gated
 /// files start sharing anything larger.
-#[allow(clippy::expect_used, clippy::panic)] // test-only, actionable failure message
 fn spillforge_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tools/spillforge/target/release/spillforge.exe");

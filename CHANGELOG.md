@@ -181,6 +181,11 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   are removed; five modules now carry no preamble at all. The 11 that do fire stay
   (`unwrap_used` ×9, `panic` in `hmn`'s arg-parsing tests, `indexing_slicing` in `spill.rs`).
   `CONVENTIONS.md` now says test modules allow only what they trigger, and how to check it.
+- **Dead lint allow on the live tests' `spillforge_path` helper** (`tests/live_watch*.rs`) — each
+  of its three copies carried `#[allow(clippy::expect_used, clippy::panic)]`, but the helper
+  fails through `assert!`, which neither lint covers; the same `#[expect]` check shows both
+  unfulfilled. Removed; every other integration-test allow fires (checked on Windows, and for
+  `macos_smoke.rs` via `aarch64-apple-darwin`).
 - **`hmn watch` selection is one `Selection` value** (`src/bin/hmn/watch.rs`, `main.rs`) — the
   explicit / top-N / `--follow-new` modes, their argument validation and the stderr header's
   description of them now live in one type, ahead of v0.2.12 part 2's `--filter` / `--min`, so

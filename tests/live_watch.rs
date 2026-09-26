@@ -31,7 +31,6 @@ use std::process::{Command, Stdio};
 /// module docs. Panics with actionable instructions if missing rather
 /// than silently skipping — an `#[ignore]`-gated test that's run
 /// explicitly is expected to have its prerequisite already satisfied.
-#[allow(clippy::expect_used, clippy::panic)] // test-only, actionable failure message
 fn spillforge_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tools/spillforge/target/release/spillforge.exe");

@@ -27,7 +27,6 @@ use std::time::Duration;
 /// Path to the spillforge fixture — see `tests/live_watch.rs`'s copy of
 /// this helper for the full rationale, and `tests/live_watch_follow_new.rs`
 /// for why it is kept duplicated rather than shared.
-#[allow(clippy::expect_used, clippy::panic)] // test-only, actionable failure message
 fn spillforge_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tools/spillforge/target/release/spillforge.exe");
