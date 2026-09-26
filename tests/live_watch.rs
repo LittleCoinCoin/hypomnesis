@@ -24,24 +24,10 @@
 
 #![cfg(all(windows, feature = "pdh", feature = "cli"))]
 
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+mod common;
 
-/// Path to the spillforge fixture, built separately per this file's
-/// module docs. Panics with actionable instructions if missing rather
-/// than silently skipping — an `#[ignore]`-gated test that's run
-/// explicitly is expected to have its prerequisite already satisfied.
-fn spillforge_path() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tools/spillforge/target/release/spillforge.exe");
-    assert!(
-        path.exists(),
-        "spillforge fixture not built — run: cargo build --release \
-         --manifest-path tools/spillforge/Cargo.toml (path checked: {})",
-        path.display()
-    );
-    path
-}
+use common::spillforge_path;
+use std::process::{Command, Stdio};
 
 /// End-to-end acceptance test: `hmn watch <pid>` attached to a live,
 /// forced-spilling `spillforge` process must report `spilled: true`

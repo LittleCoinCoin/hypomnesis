@@ -208,6 +208,9 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   `unmatchable_notices`' `#[must_use]` now gives its reason; `parse_filter_pattern` joins the other
   clap value parsers in `format.rs`; new `json_string` for always-present JSON strings. No
   behaviour change.
+- **The live tests' `spillforge_path` helper is shared** (`tests/common/mod.rs`) — with
+  `tests/live_watch_filter.rs` it had reached three identical copies; `tests/live_watch.rs`,
+  `live_watch_follow_new.rs` and `live_watch_filter.rs` now pull it in with `mod common;`.
 
 ### Fixed
 

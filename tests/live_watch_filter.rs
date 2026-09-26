@@ -20,24 +20,11 @@
 
 #![cfg(all(windows, feature = "pdh", feature = "cli"))]
 
-use std::path::PathBuf;
+mod common;
+
+use common::spillforge_path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-
-/// Path to the spillforge fixture — see `tests/live_watch.rs`'s copy of
-/// this helper for the full rationale, and `tests/live_watch_follow_new.rs`
-/// for why it is kept duplicated rather than shared.
-fn spillforge_path() -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tools/spillforge/target/release/spillforge.exe");
-    assert!(
-        path.exists(),
-        "spillforge fixture not built — run: cargo build --release \
-         --manifest-path tools/spillforge/Cargo.toml (path checked: {})",
-        path.display()
-    );
-    path
-}
 
 /// End-to-end acceptance test: `hmn watch --follow-new --filter spillforge
 /// --top 3` attached to a desktop that holds other GPU processes, while a

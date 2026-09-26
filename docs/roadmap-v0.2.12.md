@@ -243,6 +243,10 @@ live tests' `spillforge_path` helper, now in three copies. By reading, eleven fi
   `json_string_or_null(Some(..))`; `json_string_or_null` is now built on it.
 - **A stale test comment** in `main.rs` still said `run_watch` rejects explicit PIDs with
   `--follow-new`; `Selection::new` does, and is unit-tested for it.
+- **`spillforge_path` shared.** Three identical copies of the live tests' fixture helper is past
+  what the duplicate-code audit judged "defensible at this size" for two; it now lives in
+  `tests/common/mod.rs`, pulled in with `mod common;` (not a test binary of its own), and the
+  comment justifying the duplication is gone with it. In its own commit.
 
 No behaviour changed: every exact-output test passes unchanged, and `hmn watch --help` is
 byte-identical.
