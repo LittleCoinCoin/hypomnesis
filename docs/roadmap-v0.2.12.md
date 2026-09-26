@@ -188,6 +188,11 @@ detectable from the file alone.
 | 4 | `{"kind":"start", ...}` first record of `--json` (observation 1) | feature | ✅ |
 | 5 | README, FAQ, tutorial, roadmap close-out | docs | ✅ |
 
+The report's second smaller observation — `--top 3 --follow-new` churning through 42 handovers as
+the workload restarted — is not an item of its own. The report names the remedy itself: a filter
+holds the followed set at the workload, which `--filter` now does. Its claim that a filter would
+also save queries it had already withdrawn, correctly: the listing is per-interval regardless.
+
 ### Deviations from the plan, and why
 
 - **One more refactor commit: `json_string_or_null` / `json_value_or_null`.** The `start` record
