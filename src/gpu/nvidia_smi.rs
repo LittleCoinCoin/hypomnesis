@@ -300,11 +300,7 @@ fn parse_compute_app_line(line_raw: &str, idx: u32) -> Option<ComputeApp> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

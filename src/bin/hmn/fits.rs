@@ -85,11 +85,6 @@ const fn fits_exit_code(fits: bool) -> u8 {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
 mod tests {
     use super::*;
     use crate::format::GIB;

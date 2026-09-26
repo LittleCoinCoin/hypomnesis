@@ -114,10 +114,11 @@ a green gate proves only what it was built to watch:
   crate carries all of `src/bin/hmn/`; and every figure quoted in the CHANGELOG was re-derived
   from history, correcting two (item 7's line split, item 8's starting size).
 
-Recorded, not changed: the uniform test-module lint preamble (`unwrap_used`, `expect_used`,
-`missing_docs_in_private_items`) includes entries that suppress nothing in some modules —
-`missing_docs_in_private_items` in all of them. It is crate-wide house boilerplate, predating part
-1, and trimming it is a style decision for the whole crate.
+The pass also surfaced the uniform test-module lint preamble (`unwrap_used`, `expect_used`,
+`missing_docs_in_private_items`) as carrying dead entries — crate-wide boilerplate predating part
+1. At the maintainer's call it was then trimmed crate-wide: the same `#[expect]` check, widened to
+twelve configurations (macOS type-checked via `aarch64-apple-darwin`), removed 33 of 44 entries
+and five preambles outright; `CONVENTIONS.md` now states the rule.
 
 ### Withdrawn on inspection
 

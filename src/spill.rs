@@ -903,8 +903,6 @@ impl SpillReportBuilder {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items,
     // INDEX: fixture-driven assertions on episode lists whose lengths
     // are asserted immediately beforehand.
     clippy::indexing_slicing

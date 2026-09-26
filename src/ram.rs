@@ -392,11 +392,7 @@ fn macos_rss() -> Result<u64> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

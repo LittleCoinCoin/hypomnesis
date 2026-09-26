@@ -424,8 +424,6 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items,
     // EXPLICIT: panic! is the standard "unreachable pattern in a test"
     // signal for the arg-parse destructuring assertions.
     clippy::panic

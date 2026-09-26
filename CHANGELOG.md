@@ -129,6 +129,16 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   the new `Table` renderer. Found by converting every `#[allow]` in the touched files to
   `#[expect]` and compiling on Windows and Linux, stable and MSRV 1.88, default and all features
   — which also showed two suppressions needed only on MSRV, and kept. No behaviour change.
+- **Test-module lint preambles trimmed to what each module uses** (`src/`, `CONVENTIONS.md`) —
+  all fourteen `#[cfg(test)]` modules carried the same blanket
+  `#[allow(clippy::unwrap_used, clippy::expect_used, clippy::missing_docs_in_private_items)]`.
+  Converting those preambles to `#[expect]` and compiling in twelve configurations — Windows,
+  Linux and macOS (`aarch64-apple-darwin`, type-checked) × stable and MSRV 1.88 × default and all
+  features — showed 33 of their 44 entries suppressed nothing anywhere they compile:
+  `missing_docs_in_private_items` and `expect_used` in every module, `unwrap_used` in five. Those
+  are removed; five modules now carry no preamble at all. The 11 that do fire stay
+  (`unwrap_used` ×9, `panic` in `hmn`'s arg-parsing tests, `indexing_slicing` in `spill.rs`).
+  `CONVENTIONS.md` now says test modules allow only what they trigger, and how to check it.
 
 ### Fixed
 

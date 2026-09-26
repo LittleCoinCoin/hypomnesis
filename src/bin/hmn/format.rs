@@ -396,11 +396,7 @@ pub fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

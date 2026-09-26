@@ -1207,11 +1207,7 @@ fn szexefile_to_string(buf: &[u16; 260]) -> String {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
         basename_from_path, kernel_name_for_pid, parse_adapter_instance_name, parse_instance_name,

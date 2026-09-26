@@ -827,11 +827,7 @@ pub fn run_watch(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     #[cfg(feature = "test-helpers")]

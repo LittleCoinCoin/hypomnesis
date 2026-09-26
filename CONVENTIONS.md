@@ -320,6 +320,19 @@ No special action is required when adding a new `#[allow(clippy::...)]`.
 If MSRV is bumped, this guard remains necessary as long as MSRV trails
 the development toolchain.
 
+### Test-Module Lint Allowances
+
+A `#[cfg(test)] mod tests` carries an `#[allow]` only for the lints its
+own code actually triggers — usually `clippy::unwrap_used` — and none at
+all if it triggers nothing. There is no blanket preamble: until v0.2.12
+every test module carried `unwrap_used, expect_used,
+missing_docs_in_private_items`, and a check across Windows / Linux /
+macOS × stable / MSRV × default / all features showed the last two
+suppressed nothing in any of them. To check a suppression, temporarily
+change `#[allow]` to `#[expect]`: the compiler then reports any
+expectation that is unfulfilled. Do that on MSRV too, since some lints
+fire on only one toolchain.
+
 ---
 
 ## When Writing Control Flow

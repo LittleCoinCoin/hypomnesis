@@ -153,11 +153,7 @@ impl MemoryReport {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::{GpuDeviceInfo, GpuQuerySource, ProcessGpuInfo};

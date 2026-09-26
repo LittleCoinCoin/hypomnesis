@@ -221,11 +221,6 @@ fn format_spill_json(report: Option<&SpillReport>) -> String {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::missing_docs_in_private_items
-)]
 mod tests {
     use super::*;
     use crate::test_support::pid_summary;
