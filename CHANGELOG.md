@@ -39,6 +39,20 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   `GpuDeviceInfo::name_suffix`. Output unchanged. `Snapshot::ram_mb` becomes a `const fn` as a
   consequence (additive: every existing call still compiles). Audit item 2/9.
 
+### Fixed
+
+- **`DXGI` per-index lookups still aborted the whole adapter walk on one bad adapter**
+  (`src/gpu/dxgi.rs`) — v0.2.10 fixed this in `enumerate_non_nvidia` and `device_count`, but four
+  more walks with the same shape were missed: `query`, `adapter_name`, `adapter_luid` and
+  `adapter_dedicated_video_memory`. A failed `IDXGIAdapter` cast or `GetDesc` on any adapter
+  earlier in the raw enumeration order — an iGPU with a half-installed driver is the realistic case
+  — made them return `None` for a healthy NVIDIA GPU behind it, silently losing the `DXGI` reading,
+  the friendlier adapter name, the `PDH` adapter `LUID` match and the dedicated-capacity figure.
+  They now skip the bad adapter and keep walking, exactly like the two fixed in v0.2.10. This also
+  makes all six walks agree on NVIDIA index numbering: before, `device_count` skipped an unreadable
+  adapter while the per-index lookups aborted on it. Failures on the *matched* adapter itself
+  (`IDXGIAdapter3` cast, `QueryVideoMemoryInfo`) still return `None`, as before. Audit item 3/9.
+
 ## [0.2.11] - 2026-09-15
 
 Driven by a candle-mi dogfooding report

@@ -86,11 +86,32 @@ pub(super) fn query(idx: u32) -> Option<DxgiQueryResult> {
         // last enumerated adapter; the .ok()? converts that into the
         // function returning None (no more adapters).
         let adapter1 = unsafe { factory.EnumAdapters1(raw_idx) }.ok()?;
-        let adapter: IDXGIAdapter = adapter1.cast().ok()?;
+        let Ok(adapter) = adapter1.cast::<IDXGIAdapter>() else {
+            // A single malformed/unexpected adapter must not abort the
+            // whole walk — skip it and keep walking, exactly as
+            // `enumerate_non_nvidia` and `device_count` do (so all six
+            // walks agree on which adapters exist and how NVIDIA
+            // indices are numbered). EnumAdapters1 failing above is the
+            // only legitimate end-of-walk signal; raw_idx must still
+            // advance here, or this would spin forever re-probing the
+            // same failing index.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] query: adapter[raw#{raw_idx}]: IDXGIAdapter cast failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         // SAFETY: GetDesc fills DXGI_ADAPTER_DESC. The adapter handle is
         // valid (just acquired above with EnumAdapters1 returning S_OK).
-        let desc = unsafe { adapter.GetDesc() }.ok()?;
+        let Ok(desc) = (unsafe { adapter.GetDesc() }) else {
+            // Same reasoning as the cast failure above: skip, don't abort.
+            #[cfg(feature = "debug-output")]
+            eprintln!("[DXGI debug] query: adapter[raw#{raw_idx}]: GetDesc failed, skipping");
+            raw_idx += 1;
+            continue;
+        };
 
         if desc.VendorId == NVIDIA_VENDOR_ID && desc.DedicatedVideoMemory > 0 {
             if nvidia_count == idx {
@@ -167,10 +188,33 @@ pub(super) fn adapter_name(idx: u32) -> Option<String> {
     loop {
         // SAFETY: EnumAdapters1 returns Err when raw_idx is out of range.
         let adapter1 = unsafe { factory.EnumAdapters1(raw_idx) }.ok()?;
-        let adapter: IDXGIAdapter = adapter1.cast().ok()?;
+        let Ok(adapter) = adapter1.cast::<IDXGIAdapter>() else {
+            // A single malformed/unexpected adapter must not abort the
+            // whole walk — skip it and keep walking, exactly as
+            // `enumerate_non_nvidia` and `device_count` do (so all six
+            // walks agree on which adapters exist and how NVIDIA
+            // indices are numbered). EnumAdapters1 failing above is the
+            // only legitimate end-of-walk signal; raw_idx must still
+            // advance here, or this would spin forever re-probing the
+            // same failing index.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_name: adapter[raw#{raw_idx}]: IDXGIAdapter cast failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         // SAFETY: GetDesc fills DXGI_ADAPTER_DESC. Adapter handle valid.
-        let desc = unsafe { adapter.GetDesc() }.ok()?;
+        let Ok(desc) = (unsafe { adapter.GetDesc() }) else {
+            // Same reasoning as the cast failure above: skip, don't abort.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_name: adapter[raw#{raw_idx}]: GetDesc failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         if desc.VendorId == NVIDIA_VENDOR_ID && desc.DedicatedVideoMemory > 0 {
             if nvidia_count == idx {
@@ -222,10 +266,33 @@ pub(super) fn adapter_luid(idx: u32) -> Option<(i32, u32)> {
     loop {
         // SAFETY: EnumAdapters1 returns Err when raw_idx is out of range.
         let adapter1 = unsafe { factory.EnumAdapters1(raw_idx) }.ok()?;
-        let adapter: IDXGIAdapter = adapter1.cast().ok()?;
+        let Ok(adapter) = adapter1.cast::<IDXGIAdapter>() else {
+            // A single malformed/unexpected adapter must not abort the
+            // whole walk — skip it and keep walking, exactly as
+            // `enumerate_non_nvidia` and `device_count` do (so all six
+            // walks agree on which adapters exist and how NVIDIA
+            // indices are numbered). EnumAdapters1 failing above is the
+            // only legitimate end-of-walk signal; raw_idx must still
+            // advance here, or this would spin forever re-probing the
+            // same failing index.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_luid: adapter[raw#{raw_idx}]: IDXGIAdapter cast failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         // SAFETY: GetDesc fills DXGI_ADAPTER_DESC. Adapter handle valid.
-        let desc = unsafe { adapter.GetDesc() }.ok()?;
+        let Ok(desc) = (unsafe { adapter.GetDesc() }) else {
+            // Same reasoning as the cast failure above: skip, don't abort.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_luid: adapter[raw#{raw_idx}]: GetDesc failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         if desc.VendorId == NVIDIA_VENDOR_ID && desc.DedicatedVideoMemory > 0 {
             if nvidia_count == idx {
@@ -272,10 +339,33 @@ pub(super) fn adapter_dedicated_video_memory(idx: u32) -> Option<u64> {
     loop {
         // SAFETY: EnumAdapters1 returns Err when raw_idx is out of range.
         let adapter1 = unsafe { factory.EnumAdapters1(raw_idx) }.ok()?;
-        let adapter: IDXGIAdapter = adapter1.cast().ok()?;
+        let Ok(adapter) = adapter1.cast::<IDXGIAdapter>() else {
+            // A single malformed/unexpected adapter must not abort the
+            // whole walk — skip it and keep walking, exactly as
+            // `enumerate_non_nvidia` and `device_count` do (so all six
+            // walks agree on which adapters exist and how NVIDIA
+            // indices are numbered). EnumAdapters1 failing above is the
+            // only legitimate end-of-walk signal; raw_idx must still
+            // advance here, or this would spin forever re-probing the
+            // same failing index.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_dedicated_video_memory: adapter[raw#{raw_idx}]: IDXGIAdapter cast failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         // SAFETY: GetDesc fills DXGI_ADAPTER_DESC. Adapter handle valid.
-        let desc = unsafe { adapter.GetDesc() }.ok()?;
+        let Ok(desc) = (unsafe { adapter.GetDesc() }) else {
+            // Same reasoning as the cast failure above: skip, don't abort.
+            #[cfg(feature = "debug-output")]
+            eprintln!(
+                "[DXGI debug] adapter_dedicated_video_memory: adapter[raw#{raw_idx}]: GetDesc failed, skipping"
+            );
+            raw_idx += 1;
+            continue;
+        };
 
         if desc.VendorId == NVIDIA_VENDOR_ID && desc.DedicatedVideoMemory > 0 {
             if nvidia_count == idx {
