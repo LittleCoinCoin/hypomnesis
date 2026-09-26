@@ -14,7 +14,7 @@ use hypomnesis::{GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_pr
 
 use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
-    json_escape, spill_cell,
+    json_string_or_null, json_value_or_null, spill_cell,
 };
 use crate::ps::{PsRow, SortKey, footprint_bytes, ps_row_comparator};
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
@@ -419,15 +419,8 @@ fn format_watch_rows_json(
     let mut out = String::new();
     let wall_clock_json = iso8601_utc_millis(wall_clock);
     for row in rows {
-        let name_json = row.name.as_deref().map_or_else(
-            || String::from("null"),
-            |n| format!("\"{}\"", json_escape(n)),
-        );
-        let spilling_json = match row.spilling {
-            Some(true) => "true",
-            Some(false) => "false",
-            None => "null",
-        };
+        let name_json = json_string_or_null(row.name.as_deref());
+        let spilling_json = json_value_or_null(row.spilling);
         let _ = writeln!(
             out,
             r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{spilling_json}}}"#,
@@ -504,10 +497,7 @@ pub fn format_watch_summary_json(
         if i > 0 {
             out.push(',');
         }
-        let name_json = p.name.as_deref().map_or_else(
-            || String::from("null"),
-            |n| format!("\"{}\"", json_escape(n)),
-        );
+        let name_json = json_string_or_null(p.name.as_deref());
         let _ = write!(
             out,
             r#"{{"pid":{},"name":{name_json},"baseline_used_bytes":{},"peak_used_bytes":{},"baseline_shared_bytes":{},"peak_shared_bytes":{}}}"#,

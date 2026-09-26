@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use hypomnesis::{Result, Snapshot};
 
-use crate::format::{bytes_to_mib, device_name_suffix, json_escape};
+use crate::format::{bytes_to_mib, device_name_suffix, json_string_or_null, json_value_or_null};
 
 /// Whether `snaps` is non-empty but every entry's `gpu_device` is
 /// `None` — devices enumerated, but `device_info` failed for each (e.g.
@@ -103,7 +103,7 @@ fn format_summary(snaps: &[Snapshot]) -> String {
 /// skip rule for snapshots without one). Hand-rolled (no `serde` dep —
 /// same policy as `ps::format_ps_json`). Each object:
 /// `{"index":N,"name":<string|null>,"total_bytes":N,"free_bytes":N,"used_bytes":N,"reserved_bytes":<number|null>,"driver_version":<string|null>}`.
-/// String values are JSON-escaped via [`json_escape`].
+/// String values are JSON-escaped via [`json_string_or_null`].
 fn format_summary_json(snaps: &[Snapshot]) -> String {
     let mut out = String::from("[");
     let mut first = true;
@@ -116,17 +116,9 @@ fn format_summary_json(snaps: &[Snapshot]) -> String {
         } else {
             out.push(',');
         }
-        let name_json = dev.name.as_deref().map_or_else(
-            || String::from("null"),
-            |n| format!("\"{}\"", json_escape(n)),
-        );
-        let reserved_json = dev
-            .reserved_bytes
-            .map_or_else(|| "null".to_owned(), |r| r.to_string());
-        let driver_json = dev.driver_version.as_deref().map_or_else(
-            || String::from("null"),
-            |v| format!("\"{}\"", json_escape(v)),
-        );
+        let name_json = json_string_or_null(dev.name.as_deref());
+        let reserved_json = json_value_or_null(dev.reserved_bytes);
+        let driver_json = json_string_or_null(dev.driver_version.as_deref());
         let _ = write!(
             out,
             r#"{{"index":{},"name":{name_json},"total_bytes":{},"free_bytes":{},"used_bytes":{},"reserved_bytes":{reserved_json},"driver_version":{driver_json}}}"#,

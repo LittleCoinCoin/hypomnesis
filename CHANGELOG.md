@@ -173,6 +173,12 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
 - **One definition of a process's total footprint** (`src/bin/hmn/ps.rs`) — `hmn ps --sort total`
   and `hmn ps --min` each spelled `used_bytes + shared_used_bytes`; both now call
   `footprint_bytes`, which `hmn watch --min` will reuse. Part 2, item 1.
+- **One spelling of an optional JSON value** (`src/bin/hmn/format.rs`) — `hmn`'s hand-rolled
+  `--json` emitters wrote "string or `null`" seven times (process and device names, driver
+  version, episode end labels) and "`true`/`false`/`null`" or "number or `null`" three more, each
+  as a four-line idiom — short enough to slip under the duplicate-code audit's six-line window.
+  Now `json_string_or_null` and `json_value_or_null`, found while the `start` record was about to
+  add further copies. Output byte-identical: every exact-string JSON test passes unchanged.
 
 ### Fixed
 

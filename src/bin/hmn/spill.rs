@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use hypomnesis::{SpillEpisode, SpillReport, SpillTracker};
 
-use crate::format::{duration_ms, format_secs, format_vram, json_escape};
+use crate::format::{duration_ms, format_secs, format_vram, json_escape, json_string_or_null};
 
 /// Run the `spill` subcommand: spawn the wrapped command with
 /// inherited stdio, poll a [`SpillTracker`] every `interval_ms` until
@@ -166,10 +166,7 @@ fn write_episodes_json(out: &mut String, episodes: &[SpillEpisode]) {
         if i > 0 {
             out.push(',');
         }
-        let end_label = ep.end_label.as_deref().map_or_else(
-            || String::from("null"),
-            |l| format!("\"{}\"", json_escape(l)),
-        );
+        let end_label = json_string_or_null(ep.end_label.as_deref());
         let _ = write!(
             out,
             r#"{{"start_label":"{}","end_label":{end_label},"peak_shared_bytes":{},"observations":{},"duration_ms":{}}}"#,

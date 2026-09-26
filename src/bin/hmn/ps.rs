@@ -8,7 +8,9 @@ use std::fmt::Write as _;
 use clap::ValueEnum;
 use hypomnesis::{Result, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
-use crate::format::{Table, format_vram, format_vram_precise, json_escape, spill_cell};
+use crate::format::{
+    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
+};
 
 /// One row of `hmn ps` output (binary-internal — not part of the
 /// library's public API).
@@ -358,26 +360,16 @@ fn format_ps_table(rows: &[PsRow]) -> String {
 /// object: `{"pid":N,"name":<string|null>,"used_bytes":N,"shared_used_bytes":N,"device_index":N,"device_name":<string|null>,"spilling":<true|false|null>}`.
 /// `spilling` is `null`, never `false`, when spill isn't measurable
 /// here — see [`PsRow::spilling`]'s doc. String values are
-/// JSON-escaped via [`json_escape`].
+/// JSON-escaped via [`json_string_or_null`].
 fn format_ps_json(rows: &[PsRow]) -> String {
     let mut out = String::from("[");
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        let name_json = row.name.as_deref().map_or_else(
-            || String::from("null"),
-            |n| format!("\"{}\"", json_escape(n)),
-        );
-        let device_name_json = row.device_name.as_deref().map_or_else(
-            || String::from("null"),
-            |n| format!("\"{}\"", json_escape(n)),
-        );
-        let spilling_json = match row.spilling {
-            Some(true) => "true",
-            Some(false) => "false",
-            None => "null",
-        };
+        let name_json = json_string_or_null(row.name.as_deref());
+        let device_name_json = json_string_or_null(row.device_name.as_deref());
+        let spilling_json = json_value_or_null(row.spilling);
         let _ = write!(
             out,
             r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json},"spilling":{spilling_json}}}"#,

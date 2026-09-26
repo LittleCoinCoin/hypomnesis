@@ -184,6 +184,29 @@ fn write_table_line<'a>(
     out.push('\n');
 }
 
+/// A JSON string value for `s` — quoted and escaped via [`json_escape`] —
+/// or `null` for `None`. The one spelling of every optional-string field
+/// in `hmn`'s `--json` output (process and device names, driver version,
+/// episode labels, the `start` record's `device_name`).
+#[must_use]
+pub fn json_string_or_null(s: Option<&str>) -> String {
+    s.map_or_else(
+        || String::from("null"),
+        |s| format!("\"{}\"", json_escape(s)),
+    )
+}
+
+/// A JSON number or boolean for `v` — its `Display` form, which is already
+/// valid JSON for integers and `bool` — or `null` for `None`. The one
+/// spelling of every optional numeric or boolean field in `hmn`'s
+/// `--json` output (`spilling`, `reserved_bytes`, the `start` record's
+/// `duration_ms` / `top` / `min_bytes`). Callers pass integers or `bool`
+/// only: a float's `Display` (`NaN`, `inf`) would not be valid JSON.
+#[must_use]
+pub fn json_value_or_null<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map_or_else(|| String::from("null"), |v| v.to_string())
+}
+
 /// Escape a string for JSON output. Hand-rolled to avoid pulling in
 /// `serde_json` for the CLI feature.
 pub fn json_escape(s: &str) -> String {
@@ -506,6 +529,23 @@ mod tests {
         // its missing cell still pads to that width.
         assert_eq!(t.render(None, ""), format!("{:<11}  {:<1}\n", "x", ""));
         assert_eq!(Table::new(&["A"]).render(None, ""), "");
+    }
+
+    // --- json_string_or_null / json_value_or_null ---
+
+    #[test]
+    fn json_string_or_null_quotes_escapes_or_nulls() {
+        assert_eq!(json_string_or_null(None), "null");
+        assert_eq!(json_string_or_null(Some("a.exe")), "\"a.exe\"");
+        assert_eq!(json_string_or_null(Some("a\"b")), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn json_value_or_null_renders_bools_and_integers() {
+        assert_eq!(json_value_or_null(Some(true)), "true");
+        assert_eq!(json_value_or_null(Some(false)), "false");
+        assert_eq!(json_value_or_null(None::<bool>), "null");
+        assert_eq!(json_value_or_null(Some(42_u64)), "42");
     }
 
     // --- json_escape ---
