@@ -202,6 +202,12 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   as a four-line idiom — short enough to slip under the duplicate-code audit's six-line window.
   Now `json_string_or_null` and `json_value_or_null`, found while the `start` record was about to
   add further copies. Output byte-identical: every exact-string JSON test passes unchanged.
+- **Part 2 consistency pass** (`src/bin/hmn/watch.rs`, `format.rs`, `main.rs`) — docs brought
+  back in line with the code (`Selection`'s four consumers, `describe`'s byte-identity condition,
+  `write_json`'s relation to the header, the sticky name's PID-reuse limit, a stale test comment);
+  `unmatchable_notices`' `#[must_use]` now gives its reason; `parse_filter_pattern` joins the other
+  clap value parsers in `format.rs`; new `json_string` for always-present JSON strings. No
+  behaviour change.
 
 ### Fixed
 

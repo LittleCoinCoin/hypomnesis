@@ -205,7 +205,7 @@ detectable from the file alone.
 ### Verification
 
 - Every commit passed the full gate set on Windows; MSRV 1.88 clippy ran after items 2 and 3.
-- Unit tests: 28 new across part 2 (295 → 323; 289 → 323 over the release) — the guards, the header clauses
+- Unit tests: 29 new across part 2 (295 → 324; 289 → 324 over the release) — the guards, the header clauses
   (with the no-flag strings pinned byte-identical to v0.2.11's), filter-then-top-N ordering, the
   OR of patterns, the sticky name through a `[protected]` flicker, unmatchable reporting and its
   once-only notice, `--min`'s `used + shared` semantics and its place before the filter, the exact
@@ -218,6 +218,34 @@ detectable from the file alone.
   `spillforge.exe` — 100% workload rows — with the `start` record first. The existing
   `live_watch` and `live_watch_follow_new` tests still pass with the new first line in the
   stream.
+
+### Consistency pass
+
+After the five feature commits, part 2's code was re-checked the way part 1's was. Mechanically:
+the `#[expect]` scan in all twelve configurations (only the two known MSRV-only allows fire
+conditionally), `--document-private-items` on both platforms, stale backticked identifiers, and the
+unannotated-conversion scan — all clean. The duplicate detector's three new groups were all the
+live tests' `spillforge_path` helper, now in three copies. By reading, eleven findings:
+
+- **Docs that drifted while the design grew.** `Selection`'s own doc named two consumers; it has
+  four (the header, the nothing-to-select messages and the `start` record's `selection` object as
+  well). `describe` promised byte-identity "without `--filter`" where it holds without `--min`
+  either; `write_json` claimed to carry "the same fields" `describe` words, which it does not
+  (`pids`, `top` in explicit mode). Two doc blocks kept a rewrap artifact.
+- **The sticky name's limit, now stated.** `matchable_name` documents that a reused PID whose new
+  owner has no resolvable name inherits the old one — best-effort, like `hmn watch`'s PID-reuse
+  handling generally.
+- **`#[must_use]` with a reason** on `unmatchable_notices`, whose call also marks the PIDs
+  announced: dropping the result loses those notices for good.
+- **`parse_filter_pattern` moved to `format.rs`**, beside `parse_duration` and `parse_size_bytes`
+  — the other clap value parsers.
+- **`json_string`**, for the `start` record's always-present strings, which were spelled
+  `json_string_or_null(Some(..))`; `json_string_or_null` is now built on it.
+- **A stale test comment** in `main.rs` still said `run_watch` rejects explicit PIDs with
+  `--follow-new`; `Selection::new` does, and is unit-tested for it.
+
+No behaviour changed: every exact-output test passes unchanged, and `hmn watch --help` is
+byte-identical.
 
 ### At release
 

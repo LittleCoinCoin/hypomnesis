@@ -190,10 +190,16 @@ fn write_table_line<'a>(
 /// episode labels, the `start` record's `device_name`).
 #[must_use]
 pub fn json_string_or_null(s: Option<&str>) -> String {
-    s.map_or_else(
-        || String::from("null"),
-        |s| format!("\"{}\"", json_escape(s)),
-    )
+    s.map_or_else(|| String::from("null"), json_string)
+}
+
+/// A JSON string value for `s`: quoted, and escaped via [`json_escape`].
+/// For strings that are always present, such as the `start` record's
+/// `argv` entries and `--filter` patterns; see [`json_string_or_null`] for
+/// optional ones.
+#[must_use]
+pub fn json_string(s: &str) -> String {
+    format!("\"{}\"", json_escape(s))
 }
 
 /// A JSON number or boolean for `v` — its `Display` form, which is already
@@ -418,6 +424,24 @@ pub fn parse_size_bytes(s: &str) -> std::result::Result<u64, String> {
     Ok(bytes)
 }
 
+/// Parse one `--filter` pattern: any non-blank string, kept as typed. A
+/// blank pattern would match every name — almost certainly a scripting
+/// mistake (an unset variable), so it is rejected rather than accepted as
+/// a silent no-op.
+///
+/// # Errors
+///
+/// Returns an error message when `s` is empty or whitespace only.
+pub fn parse_filter_pattern(s: &str) -> std::result::Result<String, String> {
+    if s.trim().is_empty() {
+        return Err(format!(
+            "invalid filter {s:?}: expected a non-blank name pattern"
+        ));
+    }
+    // BORROW: explicit to_owned — clap stores the parsed value.
+    Ok(s.to_owned())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -531,7 +555,14 @@ mod tests {
         assert_eq!(Table::new(&["A"]).render(None, ""), "");
     }
 
-    // --- json_string_or_null / json_value_or_null ---
+    // --- json_string / json_string_or_null / json_value_or_null ---
+
+    #[test]
+    fn json_string_quotes_and_escapes() {
+        assert_eq!(json_string(""), "\"\"");
+        assert_eq!(json_string("a.exe"), "\"a.exe\"");
+        assert_eq!(json_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
 
     #[test]
     fn json_string_or_null_quotes_escapes_or_nulls() {
@@ -626,6 +657,15 @@ mod tests {
     #[test]
     fn parse_duration_trims_whitespace() {
         assert_eq!(parse_duration(" 30s ").unwrap(), Duration::from_secs(30));
+    }
+
+    // --- parse_filter_pattern ---
+
+    #[test]
+    fn parse_filter_pattern_rejects_blank() {
+        assert_eq!(parse_filter_pattern("train").unwrap(), "train");
+        assert!(parse_filter_pattern("").is_err());
+        assert!(parse_filter_pattern("   ").is_err());
     }
 
     // --- parse_size_bytes ---

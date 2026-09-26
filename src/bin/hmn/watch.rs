@@ -14,7 +14,7 @@ use hypomnesis::{GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_pr
 
 use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
-    json_string_or_null, json_value_or_null, spill_cell,
+    json_string, json_string_or_null, json_value_or_null, spill_cell,
 };
 use crate::ps::{PsRow, SortKey, footprint_bytes, ps_row_comparator};
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
@@ -514,10 +514,12 @@ pub fn format_watch_summary_json(
 
 /// How `hmn watch` chooses the PIDs it follows.
 ///
-/// The one value the selection itself ([`Self::select`]) and the stderr
-/// header's description of it ([`Self::describe`]) are both derived
-/// from, so what a capture *says* it selected and what it actually
-/// selected cannot drift apart. Built by [`Self::new`], which rejects
+/// The one value that the selection itself ([`Self::select`]), the
+/// stderr header's description of it ([`Self::describe`]), the
+/// nothing-to-select messages ([`Self::criterion`]) and the `--json`
+/// `start` record's `selection` object ([`Self::write_json`]) are all
+/// derived from, so what a capture *says* it selected and what it
+/// actually selected cannot drift apart. Built by [`Self::new`], which rejects
 /// argument combinations that only make sense for auto-selection before
 /// any hardware is touched.
 pub struct Selection {
@@ -603,9 +605,8 @@ impl Selection {
     /// unchanged in explicit mode (always watched exactly as given);
     /// otherwise the processes passing `--min`, then `--filter` (all of
     /// them without either), then the top `top` of those by committed
-    /// VRAM — sharing
-    /// `hmn ps`'s own comparator via [`select_top_n_pids`], so the two
-    /// orderings cannot drift apart.
+    /// `VRAM` — sharing `hmn ps`'s own comparator via
+    /// [`select_top_n_pids`], so the two orderings cannot drift apart.
     ///
     /// Under `--filter`, a row is judged by [`matchable_name`]: its
     /// current resolved name, else the name `state` last resolved for that
@@ -670,8 +671,9 @@ impl Selection {
     /// The stderr header's mode clause, given how many PIDs were
     /// selected at attach — e.g. `following top 3 by committed among
     /// names containing "train" (case-insensitive) (re-selected every
-    /// interval), 1 initially`. Without `--filter`, byte-identical to the
-    /// clauses `hmn watch` printed before it existed.
+    /// interval), 1 initially`. Without `--filter` or `--min`,
+    /// byte-identical to the clauses `hmn watch` printed before either
+    /// existed.
     #[must_use]
     fn describe(&self, initially: usize) -> String {
         let top = self.top;
@@ -716,8 +718,9 @@ impl Selection {
     /// (`"explicit"`, `"top"` or `"follow_new"`), the explicit `pids`
     /// (empty in the auto modes), `top` (`null` in explicit mode, where it
     /// is ignored), the `--filter` patterns as typed, and `min_bytes`
-    /// (`null` without `--min`) — the same fields [`Self::describe`] puts
-    /// into words on the stderr header.
+    /// (`null` without `--min`) — the machine-readable counterpart of the
+    /// mode and criterion [`Self::describe`] puts into words on the stderr
+    /// header.
     fn write_json(&self, out: &mut String) {
         let mode = match (self.explicit.is_empty(), self.follow_new) {
             (false, _) => "explicit",
@@ -726,11 +729,7 @@ impl Selection {
         };
         let pids: Vec<String> = self.explicit.iter().map(u32::to_string).collect();
         let top = json_value_or_null(self.explicit.is_empty().then_some(self.top));
-        let filters: Vec<String> = self
-            .filters
-            .iter()
-            .map(|f| json_string_or_null(Some(f)))
-            .collect();
+        let filters: Vec<String> = self.filters.iter().map(|f| json_string(f)).collect();
         let _ = write!(
             out,
             r#"{{"mode":"{mode}","pids":[{}],"top":{top},"filters":[{}],"min_bytes":{}}}"#,
@@ -785,7 +784,7 @@ fn format_watch_start_json(
     duration: Option<Duration>,
     selection: &Selection,
 ) -> String {
-    let argv_json: Vec<String> = argv.iter().map(|a| json_string_or_null(Some(a))).collect();
+    let argv_json: Vec<String> = argv.iter().map(|a| json_string(a)).collect();
     let mut out = String::new();
     let _ = write!(
         out,
@@ -808,6 +807,12 @@ fn format_watch_start_json(
 /// `[protected]` for one interval is not evicted by it. `None` when
 /// neither is available. Besides what [`resolved_name`] already excludes,
 /// the `nvidia-smi` fallback's literal `?` is not a name either.
+///
+/// Best-effort, like `hmn watch`'s PID-reuse handling generally: if a
+/// followed process exits and the OS reuses its PID for a process whose
+/// name cannot be resolved, the sticky name carries over and the new
+/// process can match. A reuse by a process whose name *does* resolve is
+/// judged by that name, as it should be.
 #[must_use]
 fn matchable_name<'a>(current: Option<&'a str>, sticky: Option<&'a str>) -> Option<&'a str> {
     let real = |n: &&str| *n != "?";
@@ -828,31 +833,13 @@ fn matches_any(name: &str, patterns: &[String]) -> bool {
 /// has not announced yet, recording them in `announced` — so a process
 /// `--filter` cannot judge is named exactly once rather than every
 /// interval, and never passes silently.
-#[must_use]
+#[must_use = "the PIDs are now marked announced; dropping the notices loses them for good"]
 fn unmatchable_notices(unmatchable: &[u32], announced: &mut HashSet<u32>) -> Vec<String> {
     unmatchable
         .iter()
         .filter(|pid| announced.insert(**pid))
         .map(|pid| format!("hmn watch: pid={pid} has no resolvable name; --filter cannot match it"))
         .collect()
-}
-
-/// Parse one `--filter` pattern: any non-blank string, kept as typed. A
-/// blank pattern would match every name — almost certainly a scripting
-/// mistake (an unset variable), so it is rejected rather than accepted as
-/// a silent no-op.
-///
-/// # Errors
-///
-/// Returns an error message when `s` is empty or whitespace only.
-pub fn parse_filter_pattern(s: &str) -> std::result::Result<String, String> {
-    if s.trim().is_empty() {
-        return Err(format!(
-            "invalid filter {s:?}: expected a non-blank name pattern"
-        ));
-    }
-    // BORROW: explicit to_owned — clap stores the parsed value.
-    Ok(s.to_owned())
 }
 
 /// Build the stderr breadcrumb naming PIDs that entered or left the
@@ -1972,13 +1959,6 @@ mod tests {
             unmatchable_notices(&[8, 9], &mut announced),
             ["hmn watch: pid=9 has no resolvable name; --filter cannot match it"]
         );
-    }
-
-    #[test]
-    fn parse_filter_pattern_rejects_blank() {
-        assert_eq!(parse_filter_pattern("train").unwrap(), "train");
-        assert!(parse_filter_pattern("").is_err());
-        assert!(parse_filter_pattern("   ").is_err());
     }
 
     // --- start record ---

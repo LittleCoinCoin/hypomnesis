@@ -53,11 +53,11 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 
 use crate::fits::run_fits;
-use crate::format::{parse_duration, parse_size_bytes};
+use crate::format::{parse_duration, parse_filter_pattern, parse_size_bytes};
 use crate::ps::{SortKey, run_ps};
 use crate::spill::run_spill;
 use crate::summary::run_summary;
-use crate::watch::{Selection, parse_filter_pattern, run_watch};
+use crate::watch::{Selection, run_watch};
 
 mod fits;
 mod format;
@@ -359,11 +359,11 @@ enum Commands {
         /// duration, and the `selection` (mode, explicit PIDs, `top`,
         /// `--filter` patterns, `--min` bytes) — so a capture describes
         /// itself, and one with a `start` but no `summary` is known to
-        /// have been cut short. Then one
-        /// `{"kind":"sample",...}` object per PID per interval as it
-        /// happens, plus a final `{"kind":"summary",...}` object (the
-        /// adapter `SpillReport` fields plus a `per_pid[]` peak/baseline
-        /// array) when the watch ends. Each sample carries `t_ms`
+        /// have been cut short. Then one `{"kind":"sample",...}` object
+        /// per PID per interval as it happens, plus a final
+        /// `{"kind":"summary",...}` object (the adapter `SpillReport`
+        /// fields plus a `per_pid[]` peak/baseline array) when the watch
+        /// ends. Each sample carries `t_ms`
         /// (relative to attach) and, since v0.2.11, `wall_clock`
         /// (absolute, UTC ISO-8601 with millisecond precision — the
         /// same value for every row in one interval, captured at the
@@ -775,14 +775,11 @@ mod tests {
 
     #[test]
     fn watch_args_follow_new_with_explicit_pids_parses_clean() {
-        // clap itself has no opinion on this combination — `run_watch`
-        // rejects it at runtime (exit code 2, verified live/manually,
-        // not here: it's a hard error path alongside the other early
-        // hard-error returns in `run_watch`, none of which are unit
-        // tested directly since they all require a live device query
-        // or precede one). This test only pins down that clap parsing
-        // itself doesn't reject the combination — it has to reach
-        // `run_watch` to be caught.
+        // clap itself has no opinion on this combination —
+        // `Selection::new` rejects it before any hardware call (exit
+        // code 2; the guard is unit-tested in `watch.rs`). This test
+        // only pins down that clap parsing itself doesn't reject the
+        // combination — it has to reach `Selection::new` to be caught.
         let cli = Cli::try_parse_from(["hmn", "watch", "1234", "--follow-new"]).unwrap();
         let Some(Commands::Watch {
             pids, follow_new, ..
