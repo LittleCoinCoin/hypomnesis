@@ -2,8 +2,8 @@
 
 //! Formatting and parsing primitives shared across subcommands: byte
 //! units (`format_vram`, `format_vram_precise`, `parse_size_bytes`),
-//! durations and timestamps, the SPILL-cell glyphs, table column
-//! widths, and JSON string escaping.
+//! durations and timestamps, the SPILL-cell glyphs, the column-table
+//! renderer (`Table`), and JSON string escaping.
 
 use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
@@ -186,7 +186,6 @@ fn write_table_line<'a>(
 
 /// Escape a string for JSON output. Hand-rolled to avoid pulling in
 /// `serde_json` for the CLI feature.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 pub fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -229,7 +228,6 @@ pub fn format_secs(d: Duration) -> String {
 /// day/second arithmetic is exact). A `SystemTime` predating the Unix
 /// epoch — vanishingly unlikely on any real system clock — renders as
 /// the epoch itself rather than panicking.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 pub fn iso8601_utc_millis(t: SystemTime) -> String {
     let since_epoch = t.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
     // CAST: u128 → i64, millis-since-epoch fits comfortably (i64 spans

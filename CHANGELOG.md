@@ -56,8 +56,8 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   and the constant is gone. Verified byte-identical: all four outputs, captured before and after
   from the same fixtures, match to the byte (1,617 bytes), and the no-tracker test now asserts the
   exact former constant rather than its prefix and suffix. Audit item 6/9.
-- **`src/bin/hmn.rs` split per subcommand into `src/bin/hmn/`** — the 4,600-line file (2,466
-  production + 2,040 test lines, up 25% in two releases) becomes `main.rs` (the `clap`
+- **`src/bin/hmn.rs` split per subcommand into `src/bin/hmn/`** — the 4,609-line file (2,444
+  production + 2,165 test lines when split; 3,618 lines two releases earlier) becomes `main.rs` (the `clap`
   definitions and dispatch), one module per subcommand (`summary.rs`, `ps.rs`, `spill.rs`,
   `watch.rs`, `fits.rs`), `format.rs` for the primitives several share (byte units, durations and
   timestamps, JSON escaping, table widths, SPILL glyphs, the `--interval` / `--min` / `fits`
@@ -76,7 +76,7 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   `CONVENTIONS.md` Pattern 3. Thin `nth_nvidia_adapter` / `for_each_adapter` wrappers serve the
   per-index lookups and the exhaustive walks; `is_nvidia_dgpu`, `description` and `bytes` replace
   five copies of the NVIDIA filter, three of the UTF-16 name trim and four `usize → u64` casts.
-  The file shrinks from 579 to 434 lines while gaining a module-doc section on the walker. Each
+  The file shrinks from 578 to 434 lines while gaining a module-doc section on the walker. Each
   function's factory-failure result is unchanged. Verified behaviour-preserving: all 16 ignored
   live `DXGI`/`PDH` tests pass, and their `debug-output` `DXGI` traces are identical to a build of
   the previous commit. The skip trace no longer names which lookup was walking (there is now one
@@ -114,6 +114,21 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   (size query for GPU Process Memory, PDH_STATUS = 0x…)`. Visible through `HypomnesisError`'s
   `Display`; no code, test or document matched on the old text. Follow-up from the audit
   remediation.
+- **Consistency pass over part 1** (`src/gpu/nvml.rs`, `src/gpu/pdh.rs`, `src/gpu/dxgi.rs`,
+  `src/bin/hmn/`) — a mechanical re-check of everything the audit remediation touched found and
+  fixed what the per-commit gates could not see: a `#[allow(unsafe_code)]` left on
+  `AdapterMemQuery::open` after item 5 moved its only `unsafe` into `QueryGuard::open`; eleven
+  `#[allow(clippy::missing_panics_doc)]` in the `hmn` modules that never suppressed anything (the
+  lint applies only to exported functions, and a binary exports none — ten predate the audit, one
+  was carried into new code by item 6); ten `unsafe` blocks in `nvml.rs` without a directly
+  preceding `SAFETY` comment (now none, per clippy's `undocumented_unsafe_blocks`, on Windows and
+  Linux); six intra-doc links in `nvml.rs` to items that exist on only one platform, which break
+  the other platform's private-item docs (`CONVENTIONS.md`'s link-safety rule); three cfg
+  silencers missing the `EXPLICIT` note `spill.rs` gives its own; `nvml.rs` helper docs still
+  describing a hand-initialized `NVML` rather than an `NvmlSession`; and module docs not yet naming
+  the new `Table` renderer. Found by converting every `#[allow]` in the touched files to
+  `#[expect]` and compiling on Windows and Linux, stable and MSRV 1.88, default and all features
+  — which also showed two suppressions needed only on MSRV, and kept. No behaviour change.
 
 ### Fixed
 

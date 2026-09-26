@@ -43,8 +43,8 @@
 //! Layout (since v0.2.12): this file holds the `clap` definitions and
 //! the dispatch in `main`; each subcommand lives in its own module
 //! (`summary`, `ps`, `spill`, `watch`, `fits`), and the primitives they
-//! share — byte units, durations, timestamps, JSON escaping, table
-//! widths, the SPILL-cell glyphs — live in `format`. Each module
+//! share — byte units, durations, timestamps, JSON escaping, the
+//! column-table renderer, the SPILL-cell glyphs — live in `format`. Each module
 //! carries its own tests; fixtures used by more than one module's tests
 //! live in `test_support`.
 

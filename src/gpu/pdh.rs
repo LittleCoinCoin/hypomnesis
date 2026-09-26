@@ -796,7 +796,6 @@ impl AdapterMemQuery {
     /// Returns [`HypomnesisError::Pdh`] if the `DXGI` walk cannot
     /// locate `device_index`, if [`PdhOpenQueryW`] fails, or if
     /// instance enumeration fails fatally.
-    #[allow(unsafe_code)]
     pub fn open(device_index: u32) -> Result<Option<Self>> {
         let target_luid = target_luid(device_index)?;
         let limit_bytes = super::dxgi::adapter_dedicated_video_memory(device_index).unwrap_or(0);

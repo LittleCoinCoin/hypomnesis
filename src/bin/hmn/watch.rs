@@ -411,7 +411,6 @@ fn format_watch_header_text() -> String {
 /// so the two timestamps in one sample never straddle the query's own
 /// duration) is the same for every row in the interval — formatted
 /// once via [`iso8601_utc_millis`], not per row.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_watch_rows_json(
     elapsed: Duration,
     wall_clock: SystemTime,
@@ -479,7 +478,6 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
 /// (via [`format_spill_report_with_prefix`] under the `hmn watch`
 /// prefix) or, when spill tracking was unavailable for this run, a
 /// one-line notice — followed either way by the per-PID block.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSummary]) -> String {
     let mut out = report.map_or_else(
         || "hmn watch: spill tracking unavailable for this run; per-PID VRAM below\n".to_owned(),
@@ -495,7 +493,6 @@ fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSu
 /// all-zeros `"measurable":false` shape `hmn spill --json` uses — both
 /// go through [`write_spill_report_fields`] — so scripted consumers
 /// always parse one shape either way.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 pub fn format_watch_summary_json(
     report: Option<&SpillReport>,
     per_pid: &[WatchPidSummary],

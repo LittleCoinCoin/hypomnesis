@@ -113,7 +113,6 @@ fn exit_code_byte(code: Option<i32>) -> u8 {
 /// spill observed` when no episode was recorded. The `first ... into
 /// run` fragment reuses the episode start label, which callers stamp as
 /// elapsed time (`"+12.4s"`).
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 pub fn format_spill_report_with_prefix(prefix: &str, report: &SpillReport) -> String {
     let mut out = String::new();
     let indent = " ".repeat(prefix.len() + 2);
@@ -161,7 +160,6 @@ fn format_spill_report(report: &SpillReport) -> String {
 /// [`write_spill_report_fields`], so the episode shape and escaping
 /// ([`json_escape`]) are identical across both subcommands' `--json`
 /// output.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn write_episodes_json(out: &mut String, episodes: &[SpillEpisode]) {
     out.push('[');
     for (i, ep) in episodes.iter().enumerate() {
@@ -195,7 +193,6 @@ fn write_episodes_json(out: &mut String, episodes: &[SpillEpisode]) {
 /// consumers parse one shape either way. Hand-rolled (no `serde` dep —
 /// same policy as `ps::format_ps_json`); labels are escaped via
 /// [`json_escape`]; durations are integer milliseconds.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 pub fn write_spill_report_fields(out: &mut String, report: Option<&SpillReport>) {
     let _ = write!(
         out,

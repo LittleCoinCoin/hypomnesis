@@ -352,7 +352,6 @@ fn format_ps_table(rows: &[PsRow]) -> String {
 /// `spilling` is `null`, never `false`, when spill isn't measurable
 /// here — see [`PsRow::spilling`]'s doc. String values are
 /// JSON-escaped via [`json_escape`].
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_ps_json(rows: &[PsRow]) -> String {
     let mut out = String::from("[");
     for (i, row) in rows.iter().enumerate() {

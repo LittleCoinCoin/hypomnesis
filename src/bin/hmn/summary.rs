@@ -60,7 +60,6 @@ pub fn run_summary(json: bool) -> Result<()> {
 /// Format the device summary, one line per snapshot that has a populated
 /// `gpu_device`. Snapshots without a `gpu_device` (e.g. RAM-only entries)
 /// are skipped.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_summary(snaps: &[Snapshot]) -> String {
     let mut out = String::new();
     for snap in snaps {
@@ -105,7 +104,6 @@ fn format_summary(snaps: &[Snapshot]) -> String {
 /// same policy as `ps::format_ps_json`). Each object:
 /// `{"index":N,"name":<string|null>,"total_bytes":N,"free_bytes":N,"used_bytes":N,"reserved_bytes":<number|null>,"driver_version":<string|null>}`.
 /// String values are JSON-escaped via [`json_escape`].
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_summary_json(snaps: &[Snapshot]) -> String {
     let mut out = String::from("[");
     let mut first = true;

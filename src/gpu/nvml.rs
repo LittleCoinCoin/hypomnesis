@@ -9,7 +9,7 @@
 //! - [`query`] — combined per-process + device-wide query for one device
 //!   index in a single `NVML` init/shutdown cycle.
 //! - [`device_count`] — number of NVIDIA GPUs visible to `NVML`.
-//! - [`list_compute_processes`] — every compute process on a given
+//! - `list_compute_processes` (Linux-only) — every compute process on a given
 //!   device (used by `crate::gpu_processes`).
 //!
 //! Each entry point opens its own [`NvmlSession`] — `nvmlInit_v2` on
@@ -20,7 +20,7 @@
 //! per call for simpler lifecycle management; a long-lived `NVML` context
 //! is a candidate for a later release (see `ROADMAP.md`).
 //!
-//! [`list_compute_processes`]'s per-process buffer starts at the fixed
+//! `list_compute_processes`'s per-process buffer starts at the fixed
 //! [`NVML_MAX_PROCESSES`] stack size and retries once with a
 //! heap-allocated buffer sized to NVML's own reported process count when
 //! the device holds more than that — see its doc comment. [`query`]'s
@@ -41,7 +41,7 @@
 //! Some `R570`-series drivers (observed on `RTX 5060 Ti`) return
 //! `u64::MAX` for every running process's GPU memory. Both [`query`]
 //! (which records the calling process's row) and
-//! [`list_compute_processes`] (which records every CUDA process on the
+//! `list_compute_processes` (which records every CUDA process on the
 //! device) detect this sentinel and drop the affected row(s) so the
 //! dispatcher can fall back to `nvidia-smi`. A second sanity check
 //! catches the case where per-process > device-wide total (impossible
@@ -71,7 +71,7 @@ const NVML_SUCCESS: u32 = 0;
 /// [`read_process_used`] never retries with a larger buffer — a 64-slot
 /// buffer returning `NVML_ERROR_INSUFFICIENT_SIZE` is still a soft
 /// success there (we still got the first 64 entries, enough to locate
-/// our own PID on any sane system). [`list_compute_processes`] *does*
+/// our own PID on any sane system). `list_compute_processes` *does*
 /// retry once, with a buffer sized to the true count NVML reports back
 /// on this code — see its doc comment for the documented NVML contract
 /// this relies on.
@@ -82,7 +82,7 @@ const NVML_ERROR_INSUFFICIENT_SIZE: u32 = 7;
 ///
 /// 64 is generous — most machines have fewer than 10 GPU processes; the
 /// buffer lives on the stack so the cost is small. This is a *fast-path*
-/// size, not a hard ceiling: [`list_compute_processes`] retries with a
+/// size, not a hard ceiling: `list_compute_processes` retries with a
 /// larger heap buffer when a device genuinely holds more than 64
 /// compute processes (busy multi-tenant hosts). [`read_process_used`]
 /// has no retry and stays capped at this size — sufficient there since
@@ -255,6 +255,7 @@ impl NvmlSession {
         // function pointers are only called while `lib` is loaded: `init`
         // right here, `shutdown` from Drop (see the struct doc).
         let init: NvmlInitFn = *unsafe { lib.get::<NvmlInitFn>(b"nvmlInit_v2\0") }.ok()?;
+        // SAFETY: as above — a documented NVML symbol; the alias matches the header.
         let shutdown: NvmlShutdownFn =
             *unsafe { lib.get::<NvmlShutdownFn>(b"nvmlShutdown\0") }.ok()?;
 
@@ -264,6 +265,7 @@ impl NvmlSession {
         if ret != NVML_SUCCESS {
             #[cfg(feature = "debug-output")]
             eprintln!("[NVML debug] nvmlInit_v2 returned {ret} in {caller}");
+            // EXPLICIT: caller is read only by the debug-output trace above.
             #[cfg(not(feature = "debug-output"))]
             let _ = caller;
             return None;
@@ -343,17 +345,20 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
     // (type aliases above) match the NVML header definitions.
     let get_handle: libloading::Symbol<'_, NvmlDeviceGetHandleByIndexFn> =
         unsafe { lib.get(b"nvmlDeviceGetHandleByIndex_v2\0") }.ok()?;
+    // SAFETY: as above — a documented NVML symbol; the alias matches the header.
     let get_memory: libloading::Symbol<'_, NvmlDeviceGetMemoryInfoFn> =
         unsafe { lib.get(b"nvmlDeviceGetMemoryInfo\0") }.ok()?;
+    // SAFETY: as above — a documented NVML symbol; the alias matches the header.
     let get_processes: libloading::Symbol<'_, NvmlDeviceGetComputeRunningProcessesFn> =
         unsafe { lib.get(b"nvmlDeviceGetComputeRunningProcesses_v3\0") }.ok()?;
+    // SAFETY: as above — a documented NVML symbol; the alias matches the header.
     let get_name: libloading::Symbol<'_, NvmlDeviceGetNameFn> =
         unsafe { lib.get(b"nvmlDeviceGetName\0") }.ok()?;
 
+    let mut device: NvmlDevice = std::ptr::null_mut();
     // SAFETY: nvmlDeviceGetHandleByIndex_v2 writes a valid opaque handle
     // into `device` when it returns NVML_SUCCESS. The pointer is owned
     // by NVML (we treat it as opaque).
-    let mut device: NvmlDevice = std::ptr::null_mut();
     let ret = unsafe { get_handle(idx, &raw mut device) };
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
@@ -361,14 +366,14 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
         return None;
     }
 
-    // SAFETY: nvmlDeviceGetMemoryInfo writes into the caller-provided
-    // NvmlMemoryInfo struct. The device handle is valid (acquired above
-    // with NVML_SUCCESS).
     let mut mem_info = NvmlMemoryInfo {
         total: 0,
         free: 0,
         used: 0,
     };
+    // SAFETY: nvmlDeviceGetMemoryInfo writes into the caller-provided
+    // NvmlMemoryInfo struct. The device handle is valid (acquired above
+    // with NVML_SUCCESS).
     let ret = unsafe { get_memory(device, &raw mut mem_info) };
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
@@ -423,7 +428,7 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
 /// Read the adapter name via `nvmlDeviceGetName`.
 ///
 /// Returns `None` on `NVML` failure or empty name. Caller must already
-/// hold an initialized `NVML` and a valid device handle.
+/// hold an open `NvmlSession` and a valid device handle.
 #[allow(unsafe_code)]
 fn read_device_name(
     get_name: &libloading::Symbol<'_, NvmlDeviceGetNameFn>,
@@ -473,8 +478,8 @@ fn read_device_name(
 /// `nvml.dll` / `libnvidia-ml.so.1`, so the symbol lookup fails (mapped to
 /// `None` via `.ok()?`) rather than the runtime `NVML_ERROR_FUNCTION_NOT_FOUND`
 /// the versioned-pointer dispatch would surface — or when the call itself
-/// returns a non-success code. Caller must already hold an initialized
-/// `NVML` and a valid device handle.
+/// returns a non-success code. Caller must already hold an open
+/// `NvmlSession` and a valid device handle.
 #[allow(unsafe_code)]
 fn read_device_reserved(lib: &libloading::Library, device: NvmlDevice) -> Option<u64> {
     // SAFETY: symbol lookup for nvmlDeviceGetMemoryInfo_v2. The name matches
@@ -514,7 +519,7 @@ fn read_device_reserved(lib: &libloading::Library, device: NvmlDevice) -> Option
 /// device index on the machine, so this is read once per [`query`]
 /// session from the already-open `lib`, independent of any device
 /// handle. Returns `None` on symbol-lookup failure, call failure, or an
-/// empty string. Caller must already hold an initialized `NVML`.
+/// empty string. Caller must already hold an open `NvmlSession`.
 #[allow(unsafe_code)]
 fn read_driver_version(lib: &libloading::Library) -> Option<String> {
     // SAFETY: symbol lookup for nvmlSystemGetDriverVersion. The name
@@ -715,7 +720,7 @@ fn filter_process_rows(infos: &[NvmlProcessInfo], device_total: u64) -> Vec<(u32
 /// [`crate::gpu::gpu_processes`]. On Windows under `WDDM`, `NVML`'s
 /// per-process query returns rows with `used_gpu_memory ==
 /// u64::MAX` (the `R570`-driver-class sentinel) for every entry; the
-/// dispatcher uses the [`crate::gpu::pdh`] backend instead, so this
+/// dispatcher uses the `crate::gpu::pdh` backend instead, so this
 /// helper is dead code on Windows.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -727,14 +732,16 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
     // SAFETY: symbol names match the documented NVML C API.
     let get_handle: libloading::Symbol<'_, NvmlDeviceGetHandleByIndexFn> =
         unsafe { lib.get(b"nvmlDeviceGetHandleByIndex_v2\0") }.ok()?;
+    // SAFETY: as above — a documented NVML symbol; the alias matches the header.
     let get_memory: libloading::Symbol<'_, NvmlDeviceGetMemoryInfoFn> =
         unsafe { lib.get(b"nvmlDeviceGetMemoryInfo\0") }.ok()?;
+    // SAFETY: as above — a documented NVML symbol; the alias matches the header.
     let get_processes: libloading::Symbol<'_, NvmlDeviceGetComputeRunningProcessesFn> =
         unsafe { lib.get(b"nvmlDeviceGetComputeRunningProcesses_v3\0") }.ok()?;
 
+    let mut device: NvmlDevice = std::ptr::null_mut();
     // SAFETY: nvmlDeviceGetHandleByIndex_v2 writes a valid opaque handle
     // into `device` when it returns NVML_SUCCESS.
-    let mut device: NvmlDevice = std::ptr::null_mut();
     let ret = unsafe { get_handle(idx, &raw mut device) };
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
@@ -745,13 +752,13 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
         return None;
     }
 
-    // SAFETY: nvmlDeviceGetMemoryInfo writes into the caller-provided
-    // NvmlMemoryInfo struct. Used to bound the per-row sanity check.
     let mut mem_info = NvmlMemoryInfo {
         total: 0,
         free: 0,
         used: 0,
     };
+    // SAFETY: nvmlDeviceGetMemoryInfo writes into the caller-provided
+    // NvmlMemoryInfo struct. Used to bound the per-row sanity check.
     let ret = unsafe { get_memory(device, &raw mut mem_info) };
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]

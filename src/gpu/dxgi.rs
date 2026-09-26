@@ -216,8 +216,9 @@ const fn bytes(size: usize) -> u64 {
 ///
 /// Finds the `idx`-th NVIDIA adapter with non-zero dedicated VRAM, then
 /// casts to `IDXGIAdapter3` and queries `DXGI_MEMORY_SEGMENT_GROUP_LOCAL`.
-/// Returns `None` if `idx` is past the count of qualifying adapters, or if
-/// the `IDXGIAdapter3` cast or the memory query fails on that adapter.
+/// Returns `None` if the `DXGI` factory cannot be created, if `idx` is past
+/// the count of qualifying adapters, or if the `IDXGIAdapter3` cast or the
+/// memory query fails on that adapter.
 #[allow(unsafe_code)]
 pub(super) fn query(idx: u32) -> Option<DxgiQueryResult> {
     nth_nvidia_adapter(idx, |raw_idx, adapter, desc| {
@@ -240,6 +241,7 @@ pub(super) fn query(idx: u32) -> Option<DxgiQueryResult> {
              dedicated_vram={total}, current_usage={}, budget={}",
             mem_info.CurrentUsage, mem_info.Budget
         );
+        // EXPLICIT: raw_idx is read only by the debug-output trace above.
         #[cfg(not(feature = "debug-output"))]
         let _ = raw_idx;
 
@@ -400,6 +402,7 @@ pub(super) fn enumerate_non_nvidia() -> Vec<DxgiAdapterEntry> {
              current_usage={current_usage}",
             desc.VendorId
         );
+        // EXPLICIT: raw_idx is read only by the debug-output trace above.
         #[cfg(not(feature = "debug-output"))]
         let _ = raw_idx;
 

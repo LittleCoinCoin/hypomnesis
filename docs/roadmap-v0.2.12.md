@@ -2,8 +2,9 @@
 
 > *Clean the base first, then teach `hmn watch` to follow a process by name.*
 
-**Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items, ten commits,
-none pushed yet; part 2 (dogfooding features) not started.
+**Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items in ten commits,
+then a `PDH` error-wording follow-up and a consistency pass; none pushed yet. Part 2 (dogfooding
+features) not started.
 
 ---
 
@@ -12,9 +13,13 @@ none pushed yet; part 2 (dogfooding features) not started.
 Both parts are patch-safe under the crate's own rule (`ROADMAP.md`, Principle 2: *"New variants and
 fields land in patch releases. Type-shape changes … are minor bumps, never patches."*).
 
-- **Part 1** is internal: eight behaviour-preserving refactors and one robustness fix. No public item
-  is added, removed or re-signatured; the `hmn` output contract — text and `--json` — stays
-  byte-identical, guarded by the existing exact-string tests plus one new key-parity test.
+- **Part 1** is internal: eight behaviour-preserving refactors and one robustness fix, then two
+  small visible changes, both additive under Principle 2. `Snapshot::ram_mb` became a `const fn`
+  (every existing call still compiles), and the `PDH` error messages were reworded to
+  `CONVENTIONS.md`'s form (text surfaced through `HypomnesisError`'s `Display`, which no code
+  matched on). No public item was added or removed, and the `hmn` output contract — text and
+  `--json` — stayed byte-identical, guarded by the existing exact-string tests plus the new
+  key-parity test.
 - **Part 2**'s requests are new, off-by-default `hmn watch` flags and a header line that changes only
   when one of them is passed. The one exception — a `{"kind":"start", ...}` record in the default
   `--json` stream — is still additive under Principle 2, but is the release's one deliberate
@@ -84,6 +89,35 @@ still pass" proves little about a refactor the tests were not written to watch:
 Ubuntu WSL2 ran the same gates after items 5, 7 and 9a (the ones compiling code Linux builds) and
 once more at the end; MSRV 1.88 clippy ran after items 2, 8 and 9a, and at the end. Not verifiable
 here: macOS (`metal.rs` untouched by all nine items; the macOS CI leg covers it on push).
+
+### Consistency pass — what the per-commit gates could not see
+
+After the ten commits, everything part 1 touched was re-checked mechanically, on the principle that
+a green gate proves only what it was built to watch:
+
+- **Stale lint suppressions.** Every `#[allow]` in the touched files was temporarily turned into
+  `#[expect]`, which makes the compiler report each one that suppresses nothing, then compiled in
+  eight configurations (Windows / Linux × stable / MSRV 1.88 × default / all features). Found: one
+  `unsafe_code` allow item 5 left behind, and eleven `missing_panics_doc` allows in the `hmn`
+  modules that never did anything. Two others fire only on MSRV 1.88 and were rightly kept — a
+  stable-only scan would have removed them.
+- **`SAFETY` coverage.** Clippy's `undocumented_unsafe_blocks` (not in the crate's lint set) found
+  ten blocks in `nvml.rs` whose comment was shared or separated from the `unsafe`; `dxgi.rs` and
+  `pdh.rs` were already clean. Now zero, on both platforms.
+- **Private-item docs.** Rendering with `--document-private-items` on both platforms found six
+  platform-gated intra-doc links in `nvml.rs` that break on the other platform — invisible to the
+  normal doc gate, which renders public items only.
+- **Stale references.** Every backticked identifier in the touched files' comments was checked for
+  a remaining occurrence in code: none refer to anything removed.
+- **Annotations, packaging, figures.** Every line added since the audit was scanned for an
+  unannotated `as` cast or borrow conversion (none); `cargo package --list` confirms the published
+  crate carries all of `src/bin/hmn/`; and every figure quoted in the CHANGELOG was re-derived
+  from history, correcting two (item 7's line split, item 8's starting size).
+
+Recorded, not changed: the uniform test-module lint preamble (`unwrap_used`, `expect_used`,
+`missing_docs_in_private_items`) includes entries that suppress nothing in some modules —
+`missing_docs_in_private_items` in all of them. It is crate-wide house boilerplate, predating part
+1, and trimming it is a style decision for the whole crate.
 
 ### Withdrawn on inspection
 
