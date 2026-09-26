@@ -885,17 +885,7 @@ fn format_ps_table(rows: &[PsRow]) -> String {
                 .unwrap_or_else(|| format!("GPU {}", r.device_index))
         })
         .collect();
-    // "?" (not "no") for `None` — the same "can't tell" convention used
-    // elsewhere for unresolved process names, so an operator never
-    // mistakes "not measurable here" for "measured, not spilling".
-    let spill_cells: Vec<&str> = rows
-        .iter()
-        .map(|r| match r.spilling {
-            Some(true) => "SPILL",
-            Some(false) => "no",
-            None => "?",
-        })
-        .collect();
+    let spill_cells: Vec<&str> = rows.iter().map(|r| spill_cell(r.spilling)).collect();
 
     let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
     let name_w = column_width(name_header, name_cells.iter().copied());
@@ -1733,17 +1723,7 @@ fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String 
     let dcommit_cells: Vec<String> = rows.iter().map(|r| format_delta(r.used_delta)).collect();
     let shared_cells: Vec<String> = rows.iter().map(|r| format_vram(r.shared_bytes)).collect();
     let dshared_cells: Vec<String> = rows.iter().map(|r| format_delta(r.shared_delta)).collect();
-    // "?" (not "no") for `None` — same "can't tell" convention `hmn
-    // ps`'s SPILL column uses, so an operator never mistakes "not
-    // measurable here" for "measured, not spilling".
-    let spill_cells: Vec<&str> = rows
-        .iter()
-        .map(|r| match r.spilling {
-            Some(true) => "SPILL",
-            Some(false) => "no",
-            None => "?",
-        })
-        .collect();
+    let spill_cells: Vec<&str> = rows.iter().map(|r| spill_cell(r.spilling)).collect();
 
     let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
     let name_w = column_width(name_header, name_cells.iter().copied());
@@ -2424,6 +2404,21 @@ fn device_name_suffix(name: Option<&str>) -> String {
     name.map_or_else(String::new, |n| format!(" [{n}]"))
 }
 
+/// SPILL-column cell for one row's `spilling` verdict: `SPILL`, `no`, or
+/// `?`. `?` rather than `no` for `None` is the v0.2.11 honesty contract —
+/// the same "can't tell" glyph used for unresolved process names — so an
+/// operator never mistakes "not measurable here" for "measured, not
+/// spilling". Shared by `hmn ps`'s table and `hmn watch`'s rows so the
+/// two surfaces cannot render the contract differently.
+#[must_use]
+const fn spill_cell(spilling: Option<bool>) -> &'static str {
+    match spilling {
+        Some(true) => "SPILL",
+        Some(false) => "no",
+        None => "?",
+    }
+}
+
 /// Compute the width of a table column as `max(header.len(),
 /// max(cell.len()))`.
 fn column_width<'a>(header: &str, cells: impl IntoIterator<Item = &'a str>) -> usize {
@@ -2643,6 +2638,14 @@ mod tests {
     }
 
     // --- column_width ---
+
+    #[test]
+    fn spill_cell_renders_the_honesty_contract() {
+        assert_eq!(spill_cell(Some(true)), "SPILL");
+        assert_eq!(spill_cell(Some(false)), "no");
+        // "can't tell" must never render as "measured, not spilling".
+        assert_eq!(spill_cell(None), "?");
+    }
 
     #[test]
     fn column_width_picks_max() {

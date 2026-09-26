@@ -9,7 +9,8 @@
 //! adopts `hypomnesis`) is a Cargo feature flip + thin adapter rather
 //! than a code rewrite.
 
-use crate::Snapshot;
+use crate::snapshot::bytes_as_mib;
+use crate::{GpuDeviceInfo, Snapshot};
 
 /// Delta between two `Snapshot`s.
 ///
@@ -93,20 +94,15 @@ impl MemoryReport {
             self.ram_delta_mb(),
         );
         if let (Some(before), Some(after)) = (self.before.vram_mb(), self.after.vram_mb()) {
-            // CAST: u64 → f64, byte count for MiB conversion (fits in f64 mantissa).
-            #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
             let total = self.after.gpu_device.as_ref().map_or(String::new(), |d| {
-                format!(" / {:.0} MB", d.total_bytes as f64 / 1_048_576.0)
+                format!(" / {:.0} MB", bytes_as_mib(d.total_bytes))
             });
             let qualifier = self.vram_qualifier();
-            // BORROW: explicit and_then + map_or + format — gpu_device.name is
-            // Option<String>; we need an owned String for the suffix.
             let gpu = self
                 .after
                 .gpu_device
                 .as_ref()
-                .and_then(|d| d.name.as_deref())
-                .map_or(String::new(), |name| format!(" [{name}]"));
+                .map_or(String::new(), GpuDeviceInfo::name_suffix);
             let line2 = format!(
                 "  {label}: VRAM {before:.0} MB → {after:.0} MB ({:+.0} MB{total}){qualifier}{gpu}\n",
                 after - before,

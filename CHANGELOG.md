@@ -22,6 +22,22 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   depth-aware key scanner that ignores nested `episodes[]` / `per_pid[]` keys (itself tested).
   Verified to discriminate: swapping two middle keys in one emitter, or renaming one, fails the
   new tests while every pre-existing test still passes. Audit item 1/9.
+- **Tests — `spill_cell` pins the SPILL-column honesty contract** (`src/bin/hmn.rs`) — `SPILL` /
+  `no` / `?`, asserted once for both surfaces that render it. Audit item 2/9.
+
+### Changed
+
+- **One SPILL-cell mapping for `hmn ps` and `hmn watch`** (`src/bin/hmn.rs`) — the `Some(true)` →
+  `SPILL` / `Some(false)` → `no` / `None` → `?` mapping (the v0.2.11 honesty contract) and its
+  justifying comment were written out twice, once per table; both now call one `const fn
+  spill_cell`. Output unchanged. Audit item 2/9.
+- **One MiB conversion and one adapter-name suffix for the `report` formatters** (`src/snapshot.rs`,
+  `src/report.rs`) — the `bytes / 1_048_576` cast (with its `// CAST:` and `#[allow]`) was written
+  seven times and the ` [<adapter name>]` suffix four times, across `Snapshot::ram_mb` / `vram_mb`,
+  `GpuDeviceInfo::format_free` / `format_total` / `format_used` and
+  `MemoryReport::format_before_after`. Each now exists once, as crate-private `bytes_as_mib` and
+  `GpuDeviceInfo::name_suffix`. Output unchanged. `Snapshot::ram_mb` becomes a `const fn` as a
+  consequence (additive: every existing call still compiles). Audit item 2/9.
 
 ## [0.2.11] - 2026-09-15
 

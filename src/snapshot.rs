@@ -340,6 +340,21 @@ impl Snapshot {
     }
 }
 
+/// Bytes as fractional mebibytes (`bytes / 1_048_576`) — the unit every
+/// `report`-feature `MB` figure in this crate actually is. The one place
+/// that conversion (and its cast) is written; shared by
+/// [`Snapshot::ram_mb`], [`Snapshot::vram_mb`], the `GpuDeviceInfo`
+/// one-line formatters and `MemoryReport`.
+#[cfg(feature = "report")]
+#[must_use]
+pub(crate) const fn bytes_as_mib(bytes: u64) -> f64 {
+    // CAST: u64 → f64, byte count for MiB conversion — exact below 2^53
+    // bytes (≈ 8 PiB), far beyond any real RAM or VRAM size.
+    #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
+    let bytes = bytes as f64;
+    bytes / 1_048_576.0
+}
+
 /// Convenience formatting helpers, available with `features = ["report"]`.
 ///
 /// Located on `Snapshot` (rather than `MemoryReport`) for parity with
@@ -350,12 +365,8 @@ impl Snapshot {
 impl Snapshot {
     /// `RAM` (`RSS`) usage as megabytes (`bytes / 1_048_576`).
     #[must_use]
-    pub fn ram_mb(&self) -> f64 {
-        // CAST: u64 → f64, value is memory in bytes — fits in f64 mantissa
-        // for any realistic process size (< 2^53 bytes ≈ 8 PiB).
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let mb = self.ram_bytes as f64 / 1_048_576.0;
-        mb
+    pub const fn ram_mb(&self) -> f64 {
+        bytes_as_mib(self.ram_bytes)
     }
 
     /// Per-process `VRAM` usage as megabytes, if available.
@@ -366,10 +377,7 @@ impl Snapshot {
     /// `nvidia-smi` fallback was used (check `gpu.is_per_process`).
     #[must_use]
     pub fn vram_mb(&self) -> Option<f64> {
-        // CAST: u64 → f64, same justification as ram_mb.
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let mb = self.gpu.as_ref().map(|p| p.used_bytes as f64 / 1_048_576.0);
-        mb
+        self.gpu.as_ref().map(|p| bytes_as_mib(p.used_bytes))
     }
 }
 
@@ -408,19 +416,9 @@ impl GpuDeviceInfo {
     /// file output, or test assertions. [`Self::print_free`] delegates here.
     #[must_use]
     pub fn format_free(&self) -> String {
-        // CAST: u64 → f64, byte count for MiB conversion (fits in f64
-        // mantissa for any realistic VRAM size; same justification as
-        // Snapshot::ram_mb).
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let free_mb = self.free_bytes as f64 / 1_048_576.0;
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let total_mb = self.total_bytes as f64 / 1_048_576.0;
-        // BORROW: explicit Option::as_deref + map_or — name is
-        // Option<String>; we need an owned String for the suffix.
-        let name_suffix = self
-            .name
-            .as_deref()
-            .map_or(String::new(), |n| format!(" [{n}]"));
+        let free_mb = bytes_as_mib(self.free_bytes);
+        let total_mb = bytes_as_mib(self.total_bytes);
+        let name_suffix = self.name_suffix();
         format!(
             "  GPU {}: free {free_mb:.0} MB / {total_mb:.0} MB{name_suffix}\n",
             self.index
@@ -446,17 +444,8 @@ impl GpuDeviceInfo {
     /// file output, or test assertions.
     #[must_use]
     pub fn format_total(&self) -> String {
-        // CAST: u64 → f64, byte count for MiB conversion (fits in f64
-        // mantissa for any realistic VRAM size; same justification as
-        // Snapshot::ram_mb).
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let total_mb = self.total_bytes as f64 / 1_048_576.0;
-        // BORROW: explicit Option::as_deref + map_or — name is
-        // Option<String>; we need an owned String for the suffix.
-        let name_suffix = self
-            .name
-            .as_deref()
-            .map_or(String::new(), |n| format!(" [{n}]"));
+        let total_mb = bytes_as_mib(self.total_bytes);
+        let name_suffix = self.name_suffix();
         format!(
             "  GPU {}: total {total_mb:.0} MB{name_suffix}\n",
             self.index
@@ -474,18 +463,23 @@ impl GpuDeviceInfo {
     /// file output, or test assertions.
     #[must_use]
     pub fn format_used(&self) -> String {
-        // CAST: u64 → f64, byte count for MiB conversion (fits in f64
-        // mantissa for any realistic VRAM size; same justification as
-        // Snapshot::ram_mb).
-        #[allow(clippy::cast_precision_loss, clippy::as_conversions)]
-        let used_mb = self.used_bytes as f64 / 1_048_576.0;
+        let used_mb = bytes_as_mib(self.used_bytes);
+        let name_suffix = self.name_suffix();
+        format!("  GPU {}: used {used_mb:.0} MB{name_suffix}\n", self.index)
+    }
+
+    /// The ` [<adapter name>]` suffix every one-line `report` formatter
+    /// appends, or the empty string when [`Self::name`] is `None`. Shared
+    /// by [`Self::format_free`], [`Self::format_total`],
+    /// [`Self::format_used`] and `MemoryReport::format_before_after`, so
+    /// the suffix cannot drift between them.
+    #[must_use]
+    pub(crate) fn name_suffix(&self) -> String {
         // BORROW: explicit Option::as_deref + map_or — name is
         // Option<String>; we need an owned String for the suffix.
-        let name_suffix = self
-            .name
+        self.name
             .as_deref()
-            .map_or(String::new(), |n| format!(" [{n}]"));
-        format!("  GPU {}: used {used_mb:.0} MB{name_suffix}\n", self.index)
+            .map_or(String::new(), |n| format!(" [{n}]"))
     }
 }
 
