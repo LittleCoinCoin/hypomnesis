@@ -711,6 +711,95 @@ impl Selection {
         }
         out
     }
+
+    /// Write the `start` record's `"selection"` object into `out`: `mode`
+    /// (`"explicit"`, `"top"` or `"follow_new"`), the explicit `pids`
+    /// (empty in the auto modes), `top` (`null` in explicit mode, where it
+    /// is ignored), the `--filter` patterns as typed, and `min_bytes`
+    /// (`null` without `--min`) — the same fields [`Self::describe`] puts
+    /// into words on the stderr header.
+    fn write_json(&self, out: &mut String) {
+        let mode = match (self.explicit.is_empty(), self.follow_new) {
+            (false, _) => "explicit",
+            (true, true) => "follow_new",
+            (true, false) => "top",
+        };
+        let pids: Vec<String> = self.explicit.iter().map(u32::to_string).collect();
+        let top = json_value_or_null(self.explicit.is_empty().then_some(self.top));
+        let filters: Vec<String> = self
+            .filters
+            .iter()
+            .map(|f| json_string_or_null(Some(f)))
+            .collect();
+        let _ = write!(
+            out,
+            r#"{{"mode":"{mode}","pids":[{}],"top":{top},"filters":[{}],"min_bytes":{}}}"#,
+            pids.join(","),
+            filters.join(","),
+            json_value_or_null(self.min_bytes),
+        );
+    }
+}
+
+/// The invocation as the `start` record stores it: every argument as
+/// typed, except the program path, reduced to its file name (`hmn.exe`,
+/// not `C:\Users\<name>\…\hmn.exe`). `--json` captures are routinely
+/// committed to public repositories, so the record must not publish the
+/// operator's user name or directory layout. A non-UTF-8 argument is kept,
+/// lossily, rather than dropped.
+#[must_use]
+fn recorded_argv(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<String> {
+    args.into_iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let arg = if i == 0 {
+                std::path::Path::new(&a)
+                    .file_name()
+                    .map_or_else(|| a.clone(), std::ffi::OsStr::to_os_string)
+            } else {
+                a
+            };
+            // BORROW: explicit to_string_lossy + into_owned — the record
+            // stores text; a non-UTF-8 argument is kept, lossily.
+            arg.to_string_lossy().into_owned()
+        })
+        .collect()
+}
+
+/// Format the `--json` stream's first record, written once at attach
+/// before the first sample: which `hmn` build ran, the invocation, the
+/// device, the timing, and how PIDs were chosen ([`Selection::write_json`]).
+///
+/// It makes a capture self-describing and its truncation detectable from
+/// the file alone: a `start` record with no closing `summary` means the
+/// run was cut short (hard-killed, or the file copied mid-run), which the
+/// stream could not show before v0.2.12. `t_ms` is `0` and `wall_clock` is
+/// the first sample's own instant, so the two line up.
+#[must_use]
+fn format_watch_start_json(
+    wall_clock: SystemTime,
+    argv: &[String],
+    device: u32,
+    device_name: Option<&str>,
+    interval: Duration,
+    duration: Option<Duration>,
+    selection: &Selection,
+) -> String {
+    let argv_json: Vec<String> = argv.iter().map(|a| json_string_or_null(Some(a))).collect();
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        r#"{{"kind":"start","t_ms":0,"wall_clock":"{}","hmn_version":"{}","argv":[{}],"device":{device},"device_name":{},"interval_ms":{},"duration_ms":{},"selection":"#,
+        iso8601_utc_millis(wall_clock),
+        env!("CARGO_PKG_VERSION"),
+        argv_json.join(","),
+        json_string_or_null(device_name),
+        duration_ms(interval),
+        json_value_or_null(duration.map(duration_ms)),
+    );
+    selection.write_json(&mut out);
+    out.push_str("}\n");
+    out
 }
 
 /// The name `--filter` judges a row by: its current name if that is a
@@ -922,7 +1011,21 @@ pub fn run_watch(
         interval.as_secs_f64(),
         selection.describe(watched.len()),
     );
-    if !json {
+    if json {
+        let argv = recorded_argv(std::env::args_os());
+        print!(
+            "{}",
+            format_watch_start_json(
+                first_wall_clock,
+                &argv,
+                device,
+                device_name.as_deref(),
+                interval,
+                duration,
+                selection,
+            )
+        );
+    } else {
         print!("{}", format_watch_header_text());
     }
     for notice in unmatchable_notices(&first.unmatchable, &mut announced) {
@@ -1876,6 +1979,97 @@ mod tests {
         assert_eq!(parse_filter_pattern("train").unwrap(), "train");
         assert!(parse_filter_pattern("").is_err());
         assert!(parse_filter_pattern("   ").is_err());
+    }
+
+    // --- start record ---
+
+    #[test]
+    fn start_record_describes_an_auto_selection_exactly() {
+        let sel = auto_min(3, true, &["figure13"], Some(2 * 1024 * 1024 * 1024));
+        let argv: Vec<String> = ["hmn", "watch", "--follow-new", "--filter", "figure13"]
+            .iter()
+            .map(|a| (*a).to_owned())
+            .collect();
+        let got = format_watch_start_json(
+            SystemTime::UNIX_EPOCH,
+            &argv,
+            0,
+            Some("NVIDIA GeForce RTX 5060 Ti"),
+            Duration::from_secs(30),
+            None,
+            &sel,
+        );
+        let expected = format!(
+            "{{\"kind\":\"start\",\"t_ms\":0,\"wall_clock\":\"1970-01-01T00:00:00.000Z\",\
+             \"hmn_version\":\"{}\",\"argv\":[\"hmn\",\"watch\",\"--follow-new\",\"--filter\",\
+             \"figure13\"],\"device\":0,\"device_name\":\"NVIDIA GeForce RTX 5060 Ti\",\
+             \"interval_ms\":30000,\"duration_ms\":null,\"selection\":{{\"mode\":\"follow_new\",\
+             \"pids\":[],\"top\":3,\"filters\":[\"figure13\"],\"min_bytes\":2147483648}}}}\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn start_record_explicit_mode_nulls_what_does_not_apply() {
+        let sel = Selection::new(&[42, 7], 5, false, &[], None).unwrap();
+        let got = format_watch_start_json(
+            SystemTime::UNIX_EPOCH,
+            &[],
+            1,
+            None,
+            Duration::from_millis(500),
+            Some(Duration::from_secs(60)),
+            &sel,
+        );
+        assert!(got.ends_with(
+            "\"device\":1,\"device_name\":null,\"interval_ms\":500,\"duration_ms\":60000,\
+             \"selection\":{\"mode\":\"explicit\",\"pids\":[42,7],\"top\":null,\"filters\":[],\
+             \"min_bytes\":null}}\n"
+        ));
+        // One-shot auto-selection reports its own mode.
+        let mut one_shot = String::new();
+        auto(4, false, &[]).write_json(&mut one_shot);
+        assert!(one_shot.starts_with("{\"mode\":\"top\",\"pids\":[],\"top\":4,"));
+    }
+
+    #[test]
+    fn recorded_argv_keeps_only_the_program_file_name() {
+        // Built with the platform's own separator: `\` separates nothing on
+        // Linux, so a literal Windows path would not exercise the stripping.
+        let program: std::path::PathBuf = ["users", "someone", "target", "release", "hmn.exe"]
+            .iter()
+            .collect();
+        let args = [
+            program.into_os_string(),
+            "watch".into(),
+            "--filter".into(),
+            "some/dir".into(),
+        ];
+        // Only argv[0] is reduced; a later argument that looks like a path
+        // is recorded as typed.
+        assert_eq!(
+            recorded_argv(args),
+            ["hmn.exe", "watch", "--filter", "some/dir"]
+        );
+        assert_eq!(recorded_argv([std::ffi::OsString::from("hmn")]), ["hmn"]);
+        assert!(recorded_argv(Vec::<std::ffi::OsString>::new()).is_empty());
+    }
+
+    #[test]
+    fn start_record_escapes_argv_and_patterns() {
+        let sel = auto(1, true, &["a\"b"]);
+        let got = format_watch_start_json(
+            SystemTime::UNIX_EPOCH,
+            &["C:\\hmn.exe".to_owned()],
+            0,
+            None,
+            Duration::from_secs(1),
+            None,
+            &sel,
+        );
+        assert!(got.contains("\"argv\":[\"C:\\\\hmn.exe\"]"));
+        assert!(got.contains("\"filters\":[\"a\\\"b\"]"));
     }
 
     // --- format_followed_set_change (--follow-new stderr breadcrumb) ---

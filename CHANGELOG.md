@@ -38,6 +38,24 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   with footprint >= 2 GiB`). Combined with explicit PIDs it is a hard error (exit `2`). As the
   report itself found, a size floor is a proxy for identity rather than a substitute — useful for
   headroom questions and alongside `--filter`. Same report, requests 2 and 3.
+- **`hmn watch --json` opens with a `{"kind":"start",...}` record** (`src/bin/hmn/watch.rs`) —
+  written once at attach, before the first sample: `hmn_version`, the invocation (`argv`), the
+  device and its name, `interval_ms`, `duration_ms`, and the `selection` (`mode` — `explicit`,
+  `top` or `follow_new` — explicit `pids`, `top`, the `--filter` patterns as typed, `min_bytes`),
+  rendered from the same `Selection` value as the stderr header. A capture now describes itself
+  even when its `.err` stream is discarded, and one with a `start` record but no closing
+  `summary` is known to have been cut short (hard-killed, or copied mid-run) — which the file
+  alone could not show before. `t_ms` is `0` and `wall_clock` is the first sample's instant.
+  `argv[0]` is reduced to its file name (`hmn.exe`, not the full path): these captures are
+  committed to public repositories, and the full path would publish the operator's user name.
+  **The one change to the default `--json` stream in this release** — additive, and no known
+  consumer reads the stream positionally (this repo's own tests select records by `kind`, as
+  the README describes), but a script that assumed line 1 is a `sample` must now skip the
+  `start` record. Verified live by a new `#[ignore]` test, `tests/live_watch_filter.rs`, which
+  runs `--follow-new --top 3 --filter SpillForge` over a real `spillforge` run: the `start`
+  record comes first and carries the filter, and every sample and `per_pid` entry is
+  `spillforge.exe` — the report's own regression case, 100% workload rows. Same report,
+  observation 1.
 - **Tests — `SpillReport` JSON key parity across every emitter** (`src/bin/hmn.rs`) — the
   adapter-level `SpillReport` object is spelled out by four independent emitters (`hmn spill
   --json` measurable and no-tracker, `hmn watch --json` summary measurable and no-tracker), and

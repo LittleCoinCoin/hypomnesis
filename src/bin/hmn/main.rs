@@ -351,7 +351,15 @@ enum Commands {
         /// GPU index to watch (NVML-canonical ordering).
         #[arg(long, value_name = "INDEX", default_value_t = 0)]
         device: u32,
-        /// Emit JSON Lines to stdout instead of a text table: one
+        /// Emit JSON Lines to stdout instead of a text table. Since
+        /// v0.2.12 the first line is a `{"kind":"start",...}` object —
+        /// `hmn` version, the invocation (`argv`, with the program path
+        /// reduced to its file name so a committed capture does not
+        /// publish a user name or directory layout), device, interval and
+        /// duration, and the `selection` (mode, explicit PIDs, `top`,
+        /// `--filter` patterns, `--min` bytes) — so a capture describes
+        /// itself, and one with a `start` but no `summary` is known to
+        /// have been cut short. Then one
         /// `{"kind":"sample",...}` object per PID per interval as it
         /// happens, plus a final `{"kind":"summary",...}` object (the
         /// adapter `SpillReport` fields plus a `per_pid[]` peak/baseline
