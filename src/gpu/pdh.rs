@@ -232,7 +232,7 @@ impl QueryGuard {
         let status = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &raw mut raw_handle) };
         if status != PDH_SUCCESS {
             return Err(HypomnesisError::Pdh(format!(
-                "PdhOpenQueryW failed: 0x{status:08X}"
+                "PdhOpenQueryW failed (PDH_STATUS = 0x{status:08X})"
             )));
         }
         Ok(Self { handle: raw_handle })
@@ -250,7 +250,7 @@ impl QueryGuard {
 fn target_luid(device_index: u32) -> Result<(i32, u32)> {
     super::dxgi::adapter_luid(device_index).ok_or_else(|| {
         HypomnesisError::Pdh(format!(
-            "no NVIDIA adapter at device_index {device_index} via DXGI walk"
+            "no NVIDIA adapter at device_index {device_index} (DXGI walk)"
         ))
     })
 }
@@ -442,7 +442,7 @@ fn enum_object_instances(object: PCWSTR, object_label: &str) -> Result<Option<Ve
 
     if status != PDH_MORE_DATA {
         return Err(HypomnesisError::Pdh(format!(
-            "PdhEnumObjectItemsW (size query, {object_label}) failed: 0x{status:08X}"
+            "PdhEnumObjectItemsW failed (size query for {object_label}, PDH_STATUS = 0x{status:08X})"
         )));
     }
 
@@ -476,7 +476,7 @@ fn enum_object_instances(object: PCWSTR, object_label: &str) -> Result<Option<Ve
 
     if status != PDH_SUCCESS {
         return Err(HypomnesisError::Pdh(format!(
-            "PdhEnumObjectItemsW (data fetch, {object_label}) failed: 0x{status:08X}"
+            "PdhEnumObjectItemsW failed (data fetch for {object_label}, PDH_STATUS = 0x{status:08X})"
         )));
     }
 
@@ -607,7 +607,7 @@ fn collect_segmented_rows(target_luid: (i32, u32)) -> Result<Vec<SegmentRow>> {
     let status = unsafe { PdhCollectQueryData(query.handle) };
     if status != PDH_SUCCESS {
         return Err(HypomnesisError::Pdh(format!(
-            "PdhCollectQueryData failed: 0x{status:08X}"
+            "PdhCollectQueryData failed (PDH_STATUS = 0x{status:08X})"
         )));
     }
 
@@ -868,7 +868,7 @@ impl AdapterMemQuery {
         let status = unsafe { PdhCollectQueryData(self.guard.handle) };
         if status != PDH_SUCCESS {
             return Err(HypomnesisError::Pdh(format!(
-                "PdhCollectQueryData (adapter query) failed: 0x{status:08X}"
+                "PdhCollectQueryData failed (adapter query, PDH_STATUS = 0x{status:08X})"
             )));
         }
 
@@ -880,7 +880,7 @@ impl AdapterMemQuery {
                 read_counter_bytes(c.shared),
             ) else {
                 return Err(HypomnesisError::Pdh(
-                    "PdhGetFormattedCounterValue failed for an adapter counter (sample skipped)"
+                    "PdhGetFormattedCounterValue failed (adapter counter, sample skipped)"
                         .to_owned(),
                 ));
             };

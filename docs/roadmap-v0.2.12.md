@@ -93,12 +93,17 @@ the entry is accurate: it already says *"only the dedicated-threshold arithmetic
 shared"*, and its real motivation is letting `snapshot_is_spilling` honour the threshold overrides
 `SpillTracker` exposes — a behaviour question, not a duplication one. Left unchanged.
 
-### Follow-ups observed, not in scope
+### Follow-ups observed
 
-Every `HypomnesisError::Pdh` message in `src/gpu/pdh.rs` uses the house form `"<Api> failed:
-0x…"` rather than `CONVENTIONS.md`'s `"failed to <verb>: {e}"`. Item 5 moves one of them without
-rewording it, since changing one would break the file's internal consistency. A file-wide pass is a
-separate decision: the strings are user-visible through `HypomnesisError`'s `Display`.
+**`pdh.rs` error wording — ✅ resolved after part 1, at the maintainer's call.** Every
+`HypomnesisError::Pdh` message used the form `"<Api> failed: 0x…"`. Item 5 moved one without
+rewording it, since changing one would break the file's internal consistency. The note above first
+framed the target as `CONVENTIONS.md`'s `"failed to <verb>: {e}"`; on a closer read that form is
+for wrapping a Rust error value, while a failed FFI *status code* takes the validation form
+`<noun> <problem> (<context>)` — the form `ram.rs` already uses (`K32GetProcessMemoryInfo failed
+(GetLastError = …)`, `task_info(…) failed (kern_return = …)`). All eight messages now match it,
+e.g. `PdhOpenQueryW failed (PDH_STATUS = 0x…)`. No code, test or current doc matched on the old
+text.
 
 The text tables measure column widths in **bytes** (`column_width` uses `str::len`) but `{:<w$}`
 pads in **chars**, so a row with a non-ASCII process name gets more padding than it needs and its

@@ -107,6 +107,13 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   bytes before and after, and every exact-string formatter test passes unchanged. Two new tests
   pin `Table`'s own contract (last column padded; a header-less render still sizes columns to
   their headers). Audit item 9/9 (part 2).
+- **`PDH` error messages follow the crate's error-wording convention** (`src/gpu/pdh.rs`) — the
+  `HypomnesisError::Pdh` messages read `"<Api> failed: 0x…"`; they now take the `CONVENTIONS.md`
+  validation form `<noun> <problem> (<context>)` that `ram.rs`'s status-code failures already
+  use, e.g. `PdhOpenQueryW failed (PDH_STATUS = 0xC0000BB8)` and `PdhEnumObjectItemsW failed
+  (size query for GPU Process Memory, PDH_STATUS = 0x…)`. Visible through `HypomnesisError`'s
+  `Display`; no code, test or document matched on the old text. Follow-up from the audit
+  remediation.
 
 ### Fixed
 
