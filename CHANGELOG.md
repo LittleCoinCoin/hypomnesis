@@ -56,6 +56,18 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   and the constant is gone. Verified byte-identical: all four outputs, captured before and after
   from the same fixtures, match to the byte (1,617 bytes), and the no-tracker test now asserts the
   exact former constant rather than its prefix and suffix. Audit item 6/9.
+- **`src/bin/hmn.rs` split per subcommand into `src/bin/hmn/`** — the 4,600-line file (2,466
+  production + 2,040 test lines, up 25% in two releases) becomes `main.rs` (the `clap`
+  definitions and dispatch), one module per subcommand (`summary.rs`, `ps.rs`, `spill.rs`,
+  `watch.rs`, `fits.rs`), `format.rs` for the primitives several share (byte units, durations and
+  timestamps, JSON escaping, table widths, SPILL glyphs, the `--interval` / `--min` / `fits`
+  value parsers), and a `cfg(test)` `test_support.rs` for fixtures used by more than one module's
+  tests. A pure move, done by script along the file's existing section banners: every one of the
+  173 bin tests keeps its name (sorted name lists identical before and after), `--help` for `hmn`
+  and every subcommand is byte-identical to a build of the previous commit, and `Cargo.toml` is
+  unchanged (Cargo discovers `src/bin/hmn/main.rs`). Items shared across modules are `pub`
+  inside their private module — clippy's `redundant_pub_crate` rejects `pub(crate)` /
+  `pub(super)` directly under a binary's root. Audit item 7/9.
 
 ### Fixed
 

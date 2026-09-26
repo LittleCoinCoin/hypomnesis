@@ -382,7 +382,7 @@ Cargo feature:
 | `report` | `src/report.rs` | v0.1 | none |
 | `debug-output` | (cross-cutting) | v0.1 | none |
 | `test-helpers` | (builders in `src/snapshot.rs`, `src/spill.rs`) | v0.2.1 | none |
-| `cli` | `src/bin/hmn.rs` | v0.2.0 (default-on since v0.2.8) | `clap`, `ctrlc` |
+| `cli` | `src/bin/hmn/` (`main.rs` + one module per subcommand, since v0.2.12) | v0.2.0 (default-on since v0.2.8) | `clap`, `ctrlc` |
 | `rocm` (future) | `src/gpu/rocm.rs` | — | TBD |
 
 Adding a new backend (for a new GPU vendor or new measurement source) is
