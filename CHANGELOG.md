@@ -38,6 +38,17 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   `MemoryReport::format_before_after`. Each now exists once, as crate-private `bytes_as_mib` and
   `GpuDeviceInfo::name_suffix`. Output unchanged. `Snapshot::ram_mb` becomes a `const fn` as a
   consequence (additive: every existing call still compiles). Audit item 2/9.
+- **One `nvidia-smi` spawn** (`src/gpu/nvidia_smi.rs`) — `query` and `query_compute_apps` each
+  repeated the same subprocess spawn, exit-status check and four-arm `cfg(debug-output)` diagnostic
+  `match`, differing only in the `--query-*` argument. Both now call `run_smi`. Under
+  `debug-output`, the `--query-gpu` path's trace names its query the way the compute-apps trace
+  already did (`[nvidia-smi debug] --query-gpu for idx=…`). Audit item 5/9.
+- **One `PdhOpenQueryW`, one adapter-`LUID` lookup** (`src/gpu/pdh.rs`) — the open-query-into-guard
+  sequence (with its `unsafe` block and SAFETY justification) and the `DXGI` `LUID` lookup with its
+  error message were each written twice, for the per-process listing and the adapter spill query.
+  Now `QueryGuard::open()` — which also makes the guard's "handle came from a successful open"
+  invariant, relied on by its `Drop`, hold by construction — and `target_luid()`. Error messages
+  unchanged. Audit item 5/9.
 
 ### Fixed
 

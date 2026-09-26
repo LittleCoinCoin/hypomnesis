@@ -32,6 +32,55 @@ pub(super) struct NvidiaSmiResult {
     pub driver_version: Option<String>,
 }
 
+/// Run `nvidia-smi <query_arg> --format=csv,noheader,nounits --id=<idx>`
+/// and return its stdout, lossily decoded.
+///
+/// `None` when the subprocess cannot be spawned or exits non-zero, with a
+/// `debug-output` trace naming the query (the part of `query_arg` before
+/// `=`) either way. The one place this module spawns `nvidia-smi`, so the
+/// spawn, the exit-status check and their four `cfg`-gated diagnostic
+/// arms exist once for both [`query`] and [`query_compute_apps`].
+fn run_smi(query_arg: &str, idx: u32) -> Option<String> {
+    #[cfg(feature = "debug-output")]
+    let query_name = query_arg
+        .split_once('=')
+        .map_or(query_arg, |(name, _)| name);
+
+    let cmd_result = Command::new("nvidia-smi")
+        .args([query_arg, "--format=csv,noheader,nounits"])
+        .arg(format!("--id={idx}"))
+        .output();
+
+    match cmd_result {
+        // BORROW: explicit String::from_utf8_lossy + into_owned — stdout is
+        // ASCII numerals, commas and process names under `--format=csv`, but
+        // be defensive against locale drift; the caller needs an owned String.
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+        #[cfg(feature = "debug-output")]
+        Ok(o) => {
+            // BORROW: explicit String::from_utf8_lossy — stderr is best-effort
+            // diagnostic text and may not be UTF-8 on weird locales.
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            eprintln!(
+                "[nvidia-smi debug] {query_name} for idx={idx} exited with {} \
+                 (stderr trimmed: {:?})",
+                o.status,
+                stderr.trim(),
+            );
+            None
+        }
+        #[cfg(not(feature = "debug-output"))]
+        Ok(_) => None,
+        #[cfg(feature = "debug-output")]
+        Err(e) => {
+            eprintln!("[nvidia-smi debug] failed to spawn {query_name} for idx={idx}: {e}");
+            None
+        }
+        #[cfg(not(feature = "debug-output"))]
+        Err(_) => None,
+    }
+}
+
 /// Query `nvidia-smi` for device-wide memory (and driver version) at
 /// adapter index `idx`.
 ///
@@ -45,50 +94,13 @@ pub(super) struct NvidiaSmiResult {
 /// rides along on the same `--query-gpu=` call — one extra CSV column,
 /// no second subprocess spawn.
 pub(super) fn query(idx: u32) -> Option<NvidiaSmiResult> {
-    let cmd_result = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=memory.used,memory.total,driver_version",
-            "--format=csv,noheader,nounits",
-        ])
-        .arg(format!("--id={idx}"))
-        .output();
-
-    let output = match cmd_result {
-        Ok(o) if o.status.success() => o,
-        #[cfg(feature = "debug-output")]
-        Ok(o) => {
-            // BORROW: explicit String::from_utf8_lossy — stderr is best-effort
-            // diagnostic text and may not be UTF-8 on weird locales.
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            eprintln!(
-                "[nvidia-smi debug] subprocess for idx={idx} exited with {} \
-                 (stderr trimmed: {:?})",
-                o.status,
-                stderr.trim(),
-            );
-            return None;
-        }
-        #[cfg(not(feature = "debug-output"))]
-        Ok(_) => return None,
-        #[cfg(feature = "debug-output")]
-        Err(e) => {
-            eprintln!("[nvidia-smi debug] failed to spawn for idx={idx}: {e}");
-            return None;
-        }
-        #[cfg(not(feature = "debug-output"))]
-        Err(_) => return None,
-    };
-
-    // BORROW: explicit String::from_utf8_lossy — `nvidia-smi --format=csv,nounits`
-    // output is ASCII numerals + commas, but be defensive against locale drift.
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = run_smi("--query-gpu=memory.used,memory.total,driver_version", idx)?;
     // The else block carries a cfg-gated `eprintln!` for the `debug-output`
     // feature; with that feature off, the body collapses to a bare
     // `return None` and `clippy::question_mark` (under `-D warnings` on
-    // MSRV 1.88) wants `?` instead. We keep the let-else so the
-    // diagnostic-on path stays consistent with the surrounding error
-    // sites (spawn fail / non-zero exit / parse fail), all of which
-    // also use let-else with cfg-gated debug prints.
+    // MSRV 1.88) wants `?` instead. We keep the let-else so this empty-
+    // stdout case gets its own diagnostic, distinct from the spawn and
+    // non-zero-exit traces `run_smi` already emitted before the `?` above.
     #[allow(clippy::question_mark)]
     let Some(line_raw) = stdout.lines().next() else {
         #[cfg(feature = "debug-output")]
@@ -203,43 +215,7 @@ pub(super) struct ComputeApp {
 /// `used_memory` don't parse, are skipped (with a `debug-output`
 /// trace).
 pub(super) fn query_compute_apps(idx: u32) -> Option<Vec<ComputeApp>> {
-    let cmd_result = Command::new("nvidia-smi")
-        .args([
-            "--query-compute-apps=pid,process_name,used_memory",
-            "--format=csv,noheader,nounits",
-        ])
-        .arg(format!("--id={idx}"))
-        .output();
-
-    let output = match cmd_result {
-        Ok(o) if o.status.success() => o,
-        #[cfg(feature = "debug-output")]
-        Ok(o) => {
-            // BORROW: explicit String::from_utf8_lossy — stderr is best-effort
-            // diagnostic text and may not be UTF-8 on weird locales.
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            eprintln!(
-                "[nvidia-smi debug] --query-compute-apps for idx={idx} exited with {} \
-                 (stderr trimmed: {:?})",
-                o.status,
-                stderr.trim(),
-            );
-            return None;
-        }
-        #[cfg(not(feature = "debug-output"))]
-        Ok(_) => return None,
-        #[cfg(feature = "debug-output")]
-        Err(e) => {
-            eprintln!("[nvidia-smi debug] failed to spawn --query-compute-apps for idx={idx}: {e}");
-            return None;
-        }
-        #[cfg(not(feature = "debug-output"))]
-        Err(_) => return None,
-    };
-
-    // BORROW: explicit String::from_utf8_lossy — `nvidia-smi --format=csv,nounits`
-    // is ASCII numerals + commas + process names; defensive against locale drift.
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = run_smi("--query-compute-apps=pid,process_name,used_memory", idx)?;
 
     let rows: Vec<ComputeApp> = stdout
         .lines()

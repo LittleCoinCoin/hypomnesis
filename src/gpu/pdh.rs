@@ -209,6 +209,52 @@ struct QueryGuard {
     handle: PDH_HQUERY,
 }
 
+impl QueryGuard {
+    /// Open a new realtime `PDH` query against the local performance data
+    /// source and take ownership of its handle.
+    ///
+    /// The only place this module calls [`PdhOpenQueryW`], so the
+    /// guard's constructor invariant — the handle came from a successful
+    /// open, which [`Drop`] relies on — is established in exactly one spot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HypomnesisError::Pdh`] if [`PdhOpenQueryW`] fails.
+    #[allow(unsafe_code)]
+    fn open() -> Result<Self> {
+        let mut raw_handle = PDH_HQUERY::default();
+        // SAFETY: PdhOpenQueryW with NULL data-source and 0 user-data is the
+        // documented "open a new realtime query against the local performance
+        // data source" form. `phquery` is a valid out-parameter pointer to a
+        // stack-allocated PDH_HQUERY (zero-initialised). Status return is
+        // checked below; on success the handle is moved into the guard
+        // immediately.
+        let status = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &raw mut raw_handle) };
+        if status != PDH_SUCCESS {
+            return Err(HypomnesisError::Pdh(format!(
+                "PdhOpenQueryW failed: 0x{status:08X}"
+            )));
+        }
+        Ok(Self { handle: raw_handle })
+    }
+}
+
+/// `LUID` of the NVIDIA adapter at `device_index`, from the `DXGI` walk —
+/// the key every `PDH` `GPU … Memory` instance name is filtered by. Shared
+/// by [`query_per_process_vram`] and [`AdapterMemQuery::open`].
+///
+/// # Errors
+///
+/// Returns [`HypomnesisError::Pdh`] if the `DXGI` walk finds no NVIDIA
+/// adapter at `device_index`.
+fn target_luid(device_index: u32) -> Result<(i32, u32)> {
+    super::dxgi::adapter_luid(device_index).ok_or_else(|| {
+        HypomnesisError::Pdh(format!(
+            "no NVIDIA adapter at device_index {device_index} via DXGI walk"
+        ))
+    })
+}
+
 impl Drop for QueryGuard {
     fn drop(&mut self) {
         // SAFETY: `self.handle` was obtained from a successful
@@ -500,20 +546,7 @@ fn read_counter_bytes(h_counter: PDH_HCOUNTER) -> Option<u64> {
 #[allow(unsafe_code)]
 fn collect_segmented_rows(target_luid: (i32, u32)) -> Result<Vec<SegmentRow>> {
     // ---- 1. Open the query ------------------------------------------------
-    let mut raw_handle = PDH_HQUERY::default();
-    // SAFETY: PdhOpenQueryW with NULL data-source and 0 user-data is the
-    // documented "open a new realtime query against the local performance
-    // data source" form. `phquery` is a valid out-parameter pointer to a
-    // stack-allocated PDH_HQUERY (zero-initialised). Status return is
-    // checked below; on success the handle is moved into the RAII guard
-    // immediately.
-    let status = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &raw mut raw_handle) };
-    if status != PDH_SUCCESS {
-        return Err(HypomnesisError::Pdh(format!(
-            "PdhOpenQueryW failed: 0x{status:08X}"
-        )));
-    }
-    let query = QueryGuard { handle: raw_handle };
+    let query = QueryGuard::open()?;
 
     // ---- 2. Enumerate instances -------------------------------------------
     // On absence of the counter set, the query closes via Drop.
@@ -653,11 +686,7 @@ pub(super) struct ProcessMemoryRow {
 /// message naming the cause, so [`crate::gpu::gpu_processes`] can
 /// pattern-match and fall back to `nvidia-smi` if desired.
 pub(super) fn query_per_process_vram(device_index: u32) -> Result<Vec<ProcessMemoryRow>> {
-    let target_luid = super::dxgi::adapter_luid(device_index).ok_or_else(|| {
-        HypomnesisError::Pdh(format!(
-            "no NVIDIA adapter at device_index {device_index} via DXGI walk"
-        ))
-    })?;
+    let target_luid = target_luid(device_index)?;
 
     let segments = collect_segmented_rows(target_luid)?;
 
@@ -769,11 +798,7 @@ impl AdapterMemQuery {
     /// instance enumeration fails fatally.
     #[allow(unsafe_code)]
     pub fn open(device_index: u32) -> Result<Option<Self>> {
-        let target_luid = super::dxgi::adapter_luid(device_index).ok_or_else(|| {
-            HypomnesisError::Pdh(format!(
-                "no NVIDIA adapter at device_index {device_index} via DXGI walk"
-            ))
-        })?;
+        let target_luid = target_luid(device_index)?;
         let limit_bytes = super::dxgi::adapter_dedicated_video_memory(device_index).unwrap_or(0);
 
         let Some(instances) =
@@ -782,19 +807,7 @@ impl AdapterMemQuery {
             return Ok(None);
         };
 
-        let mut raw_handle = PDH_HQUERY::default();
-        // SAFETY: same documented "open a new realtime query against the
-        // local performance data source" form as collect_segmented_rows.
-        // `phquery` is a valid out-parameter pointer to a stack-allocated
-        // PDH_HQUERY (zero-initialised). Status is checked below; on
-        // success the handle moves into the RAII guard immediately.
-        let status = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &raw mut raw_handle) };
-        if status != PDH_SUCCESS {
-            return Err(HypomnesisError::Pdh(format!(
-                "PdhOpenQueryW failed: 0x{status:08X}"
-            )));
-        }
-        let guard = QueryGuard { handle: raw_handle };
+        let guard = QueryGuard::open()?;
 
         let mut counters: Vec<AdapterSegmentCounters> = Vec::new();
         for instance in &instances {
