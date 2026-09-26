@@ -30,6 +30,14 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   From candle-mi's
   [2026-09-21 dogfooding report](docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md),
   requests 1 and 3.
+- **`hmn watch --min <SIZE>` — a size floor for auto-selection** (`src/bin/hmn/watch.rs`,
+  `main.rs`) — considers only processes whose total footprint (`used_bytes + shared_used_bytes`)
+  is at least SIZE, with the same definition and SIZE syntax as `hmn ps --min` (both now call
+  `footprint_bytes`). Applied before `--filter`, so the unresolved-name notice skips processes too
+  small to matter; re-applied every interval under `--follow-new`; shown on the header line (`…
+  with footprint >= 2 GiB`). Combined with explicit PIDs it is a hard error (exit `2`). As the
+  report itself found, a size floor is a proxy for identity rather than a substitute — useful for
+  headroom questions and alongside `--filter`. Same report, requests 2 and 3.
 - **Tests — `SpillReport` JSON key parity across every emitter** (`src/bin/hmn.rs`) — the
   adapter-level `SpillReport` object is spelled out by four independent emitters (`hmn spill
   --json` measurable and no-tracker, `hmn watch --json` summary measurable and no-tracker), and

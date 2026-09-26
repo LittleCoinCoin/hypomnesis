@@ -13,10 +13,10 @@ use std::time::{Duration, SystemTime};
 use hypomnesis::{GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_processes};
 
 use crate::format::{
-    Table, device_name_suffix, duration_ms, format_vram, iso8601_utc_millis, json_escape,
-    spill_cell,
+    Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
+    json_escape, spill_cell,
 };
-use crate::ps::{PsRow, SortKey, ps_row_comparator};
+use crate::ps::{PsRow, SortKey, footprint_bytes, ps_row_comparator};
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
 
 /// Minimum unresolved-PID cumulative growth (bytes, either committed or
@@ -543,6 +543,10 @@ pub struct Selection {
     /// `--filter` patterns, as typed. Empty means no name filter; a name
     /// qualifies when it contains any one of them, ignoring case.
     filters: Vec<String>,
+    /// `--min`: the smallest total footprint, in bytes, a process needs to
+    /// be considered — measured by `ps::footprint_bytes`, exactly as
+    /// `hmn ps --min` does. `None` means no threshold.
+    min_bytes: Option<u64>,
 }
 
 /// The outcome of one [`Selection::select`] call.
@@ -561,14 +565,15 @@ impl Selection {
     /// # Errors
     ///
     /// Returns the user-facing message (without the `hmn: ` prefix) when
-    /// `--follow-new` or `--filter` is combined with explicit PIDs: both
-    /// narrow auto-selection, and there is no top-N to narrow for a fixed
-    /// list.
+    /// `--follow-new`, `--filter` or `--min` is combined with explicit
+    /// PIDs: each shapes auto-selection, and there is no top-N to shape
+    /// for a fixed list.
     pub fn new(
         pids: &[u32],
         top: usize,
         follow_new: bool,
         filters: &[String],
+        min_bytes: Option<u64>,
     ) -> Result<Self, String> {
         let mut seen = HashSet::new();
         let explicit: Vec<u32> = pids.iter().copied().filter(|p| seen.insert(*p)).collect();
@@ -587,19 +592,28 @@ impl Selection {
                         .to_owned(),
                 );
             }
+            if min_bytes.is_some() {
+                return Err(
+                    "watch --min only applies to auto-selection; drop --min or the explicit \
+                     PID list"
+                        .to_owned(),
+                );
+            }
         }
         Ok(Self {
             explicit,
             top,
             follow_new,
             filters: filters.to_vec(),
+            min_bytes,
         })
     }
 
     /// Resolve which PIDs to watch from one sample: the explicit PIDs
     /// unchanged in explicit mode (always watched exactly as given);
-    /// otherwise the processes passing `--filter` (all of them without
-    /// it), then the top `top` of those by committed VRAM — sharing
+    /// otherwise the processes passing `--min`, then `--filter` (all of
+    /// them without either), then the top `top` of those by committed
+    /// VRAM — sharing
     /// `hmn ps`'s own comparator via [`select_top_n_pids`], so the two
     /// orderings cannot drift apart.
     ///
@@ -626,6 +640,10 @@ impl Selection {
         // no device-name or live-spill context of its own to give.
         let ps_rows: Vec<PsRow> = rows
             .iter()
+            .filter(|e| {
+                self.min_bytes
+                    .is_none_or(|min| footprint_bytes(e.used_bytes, e.shared_used_bytes) >= min)
+            })
             .filter(|e| {
                 if self.filters.is_empty() {
                     return true;
@@ -683,18 +701,25 @@ impl Selection {
     /// The auto-selection criterion beyond "top N by committed", as a
     /// clause to splice after it (leading space included), or the empty
     /// string when there is none — e.g. ` among names containing "a" or
-    /// "b" (case-insensitive)`. Patterns are `Debug`-quoted, so one
-    /// containing a quote or a space reads unambiguously.
+    /// "b" (case-insensitive) with footprint >= 2 GiB`. Patterns are
+    /// `Debug`-quoted, so one containing a quote or a space reads
+    /// unambiguously; the threshold is rendered by [`format_vram_precise`],
+    /// as `hmn ps`'s summary line renders its own `--min`.
     #[must_use]
     fn criterion(&self) -> String {
-        if self.filters.is_empty() {
-            return String::new();
+        let mut out = String::new();
+        if !self.filters.is_empty() {
+            let patterns: Vec<String> = self.filters.iter().map(|f| format!("{f:?}")).collect();
+            let _ = write!(
+                out,
+                " among names containing {} (case-insensitive)",
+                patterns.join(" or ")
+            );
         }
-        let patterns: Vec<String> = self.filters.iter().map(|f| format!("{f:?}")).collect();
-        format!(
-            " among names containing {} (case-insensitive)",
-            patterns.join(" or ")
-        )
+        if let Some(min) = self.min_bytes {
+            let _ = write!(out, " with footprint >= {}", format_vram_precise(min));
+        }
+        out
     }
 }
 
@@ -1575,21 +1600,26 @@ mod tests {
 
     /// An auto-selection `Selection` with the given `--filter` patterns.
     fn auto(top: usize, follow_new: bool, filters: &[&str]) -> Selection {
+        auto_min(top, follow_new, filters, None)
+    }
+
+    /// Like [`auto`], with a `--min` threshold too.
+    fn auto_min(top: usize, follow_new: bool, filters: &[&str], min: Option<u64>) -> Selection {
         let filters: Vec<String> = filters.iter().map(|f| (*f).to_owned()).collect();
-        Selection::new(&[], top, follow_new, &filters).unwrap()
+        Selection::new(&[], top, follow_new, &filters, min).unwrap()
     }
 
     #[cfg(feature = "test-helpers")]
     #[test]
     fn selection_explicit_passthrough_ignores_rows_and_top() {
         let rows = vec![entry(1, Some("a.exe"), 9_000, 0)];
-        let sel = Selection::new(&[42, 43], 1, false, &[]).unwrap();
+        let sel = Selection::new(&[42, 43], 1, false, &[], None).unwrap();
         assert_eq!(sel.select(&rows, &WatchState::new()).pids, vec![42, 43]);
     }
 
     #[test]
     fn selection_explicit_pids_are_deduplicated_in_order() {
-        let sel = Selection::new(&[7, 3, 7, 3, 9], 5, false, &[]).unwrap();
+        let sel = Selection::new(&[7, 3, 7, 3, 9], 5, false, &[], None).unwrap();
         assert_eq!(sel.select(&[], &WatchState::new()).pids, vec![7, 3, 9]);
     }
 
@@ -1616,7 +1646,7 @@ mod tests {
 
     #[test]
     fn selection_rejects_follow_new_with_explicit_pids() {
-        let err = Selection::new(&[42], 5, true, &[]).err().unwrap();
+        let err = Selection::new(&[42], 5, true, &[], None).err().unwrap();
         // Byte-identical to the pre-v0.2.12 message (`main` adds `hmn: `).
         assert_eq!(
             err,
@@ -1627,7 +1657,7 @@ mod tests {
 
     #[test]
     fn selection_rejects_filter_with_explicit_pids() {
-        let err = Selection::new(&[42], 5, false, &["train".to_owned()])
+        let err = Selection::new(&[42], 5, false, &["train".to_owned()], None)
             .err()
             .unwrap();
         assert_eq!(
@@ -1650,7 +1680,7 @@ mod tests {
             "watching 4 PID(s) (top 5 by committed)"
         );
         assert_eq!(
-            Selection::new(&[10, 11], 5, false, &[])
+            Selection::new(&[10, 11], 5, false, &[], None)
                 .unwrap()
                 .describe(2),
             "watching 2 PID(s)"
@@ -1749,6 +1779,63 @@ mod tests {
         let got = auto(3, true, &[]).select(&rows, &WatchState::new());
         assert_eq!(got.pids, vec![1]);
         assert!(got.unmatchable.is_empty());
+    }
+
+    #[test]
+    fn selection_rejects_min_with_explicit_pids() {
+        let err = Selection::new(&[42], 5, false, &[], Some(1)).err().unwrap();
+        assert_eq!(
+            err,
+            "watch --min only applies to auto-selection; drop --min or the explicit PID list"
+        );
+    }
+
+    #[test]
+    fn selection_describe_announces_the_min_threshold() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(
+            auto_min(3, true, &[], Some(2 * GIB)).describe(1),
+            "following top 3 by committed with footprint >= 2 GiB (re-selected every interval), \
+             1 initially"
+        );
+        assert_eq!(
+            auto_min(5, false, &["train"], Some(512 * 1024 * 1024)).describe(2),
+            "watching 2 PID(s) (top 5 by committed among names containing \"train\" \
+             (case-insensitive) with footprint >= 512 MiB)"
+        );
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_min_counts_committed_plus_shared_like_ps_min() {
+        // pid 1: 900 committed + 200 shared = 1,100 >= 1,000 -> kept, although
+        // its committed bytes alone are below the threshold. pid 2: 999 -> cut.
+        let rows = vec![
+            entry(1, Some("a.exe"), 900, 200),
+            entry(2, Some("b.exe"), 999, 0),
+            entry(3, Some("c.exe"), 5_000, 0),
+        ];
+        let got = auto_min(9, true, &[], Some(1_000)).select(&rows, &WatchState::new());
+        assert_eq!(got.pids, vec![3, 1]);
+        // `--min 0` is a no-op, as for `hmn ps`.
+        let all = auto_min(9, true, &[], Some(0)).select(&rows, &WatchState::new());
+        assert_eq!(all.pids.len(), 3);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_min_applies_before_the_filter() {
+        // A below-threshold unresolved row is cut by `--min` first, so it is
+        // not announced as unmatchable: only processes big enough to matter
+        // are worth a notice.
+        let rows = vec![
+            entry(1, Some("[protected]"), 10, 0),
+            entry(2, Some("[protected]"), 5_000, 0),
+            entry(3, Some("train.exe"), 5_000, 0),
+        ];
+        let got = auto_min(9, true, &["train"], Some(1_000)).select(&rows, &WatchState::new());
+        assert_eq!(got.pids, vec![3]);
+        assert_eq!(got.unmatchable, vec![2]);
     }
 
     #[test]

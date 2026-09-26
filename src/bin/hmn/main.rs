@@ -276,7 +276,7 @@ enum Commands {
     /// With no PID given, auto-selects the top `--top` processes by
     /// committed VRAM from the first sample and keeps that fixed set for
     /// the run (or re-selects every interval with `--follow-new`);
-    /// `--filter` narrows that choice to processes by name. A
+    /// `--filter` and `--min` narrow that choice by name and by size. A
     /// watched PID that stops appearing in the per-process listing
     /// (exited, or simply holds no GPU memory right now) renders as 0
     /// bytes each interval — `hmn watch` does not distinguish the two;
@@ -290,7 +290,8 @@ enum Commands {
     /// summary (adapter-level `SpillReport` plus per-PID peak/baseline) and
     /// exiting `0` if spill was never observed, `1` if it was at least
     /// once, `2` on a hard error (bad device, nothing to auto-select, or
-    /// `--follow-new` / `--filter` combined with explicit PID(s)).
+    /// `--follow-new` / `--filter` / `--min` combined with explicit
+    /// PID(s)).
     Watch {
         /// Explicit PID(s) to watch. When omitted, auto-selects the top
         /// `--top` processes by committed VRAM from the first sample.
@@ -338,6 +339,15 @@ enum Commands {
         /// error (exit `2`).
         #[arg(long = "filter", value_name = "PATTERN", value_parser = parse_filter_pattern)]
         filters: Vec<String>,
+        /// Auto-select mode only: consider only processes whose total
+        /// footprint (`used_bytes + shared_used_bytes`, exactly as
+        /// `hmn ps --min` measures it) is at least SIZE, then keep the
+        /// top `--top` of those. Same SIZE syntax as `hmn ps --min`.
+        /// Applied before `--filter`, and re-applied every interval
+        /// under `--follow-new`. Shown on the stderr header line.
+        /// Combining this with explicit PID(s) is a hard error (exit `2`).
+        #[arg(long, value_name = "SIZE", value_parser = parse_size_bytes)]
+        min: Option<u64>,
         /// GPU index to watch (NVML-canonical ordering).
         #[arg(long, value_name = "INDEX", default_value_t = 0)]
         device: u32,
@@ -421,12 +431,13 @@ fn main() -> std::process::ExitCode {
             top,
             follow_new,
             filters,
+            min,
             device,
             json,
         }) => {
             // Validated before any backend call: an invalid argument
             // combination fails fast without touching hardware at all.
-            return match Selection::new(&pids, top, follow_new, &filters) {
+            return match Selection::new(&pids, top, follow_new, &filters, min) {
                 Ok(selection) => run_watch(&selection, interval, duration, device, json),
                 Err(msg) => {
                     eprintln!("hmn: {msg}");
@@ -632,6 +643,7 @@ mod tests {
             top,
             follow_new,
             filters,
+            min,
             device,
             json,
         }) = cli.command
@@ -640,6 +652,7 @@ mod tests {
         };
         assert!(pids.is_empty());
         assert!(filters.is_empty());
+        assert_eq!(min, None);
         assert_eq!(interval, Duration::from_secs(5));
         assert_eq!(duration, None);
         assert_eq!(top, 5);
@@ -728,6 +741,16 @@ mod tests {
     fn watch_args_filter_rejects_blank_pattern() {
         assert!(Cli::try_parse_from(["hmn", "watch", "--filter", ""]).is_err());
         assert!(Cli::try_parse_from(["hmn", "watch", "--filter", "  "]).is_err());
+    }
+
+    #[test]
+    fn watch_args_min_uses_ps_size_syntax() {
+        let cli = Cli::try_parse_from(["hmn", "watch", "--follow-new", "--min", "2GiB"]).unwrap();
+        let Some(Commands::Watch { min, .. }) = cli.command else {
+            panic!("expected Watch subcommand");
+        };
+        assert_eq!(min, Some(2 * 1024 * 1024 * 1024));
+        assert!(Cli::try_parse_from(["hmn", "watch", "--min", "bogus"]).is_err());
     }
 
     #[test]
