@@ -2,8 +2,8 @@
 
 > *Clean the base first, then teach `hmn watch` to follow a process by name.*
 
-**Status: in progress.** Part 1 (audit remediation) under way; part 2 (dogfooding features) not
-started.
+**Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items, ten commits,
+none pushed yet; part 2 (dogfooding features) not started.
 
 ---
 
@@ -60,6 +60,30 @@ Design decisions taken before starting, and why:
   frame; an iterator would hand owned COM pointers to the caller.
 - **Items 3 and 8 land separately, fix then refactor**, so the one behaviour change in part 1 is
   bisectable on its own and the refactor that follows can be checked as behaviour-preserving.
+
+### Verification — each commit carried its own proof
+
+Every commit passed the full gate set on Windows before landing: `cargo fmt --check`, `clippy
+--all-targets -D warnings` with default features and with `--all-features` (so both
+`debug-output` arms), `cargo check --no-default-features` and `--no-default-features --features
+nvml,dxgi,pdh`, `cargo test --all-features`, and `cargo doc` under `-D warnings`. The test count
+only grew: 289 → 295. On top of that, each change got the check that fits it, because "the tests
+still pass" proves little about a refactor the tests were not written to watch:
+
+| # | What had to be true | How it was shown |
+|---|---|---|
+| 1 | The new parity tests actually catch drift | Mutations — two middle keys swapped in one emitter, one key renamed in another — each failed a new test while every pre-existing test passed |
+| 2, 5 | Output unchanged | Exact-string formatter tests unchanged; live smoke of every subcommand; for 5, ignored live tests on Windows and on Linux, where `process_gpu_info` goes through `nvidia-smi` and so through `run_smi` |
+| 3 | The fix mirrors the reviewed v0.2.10 shape | Line-for-line with `enumerate_non_nvidia` / `device_count`; a real mid-walk adapter failure cannot be injected here (the reference machine has no iGPU) |
+| 6 | The unified JSON writer is byte-identical | A throwaway probe wrote all four outputs before and after: 1,617 bytes, identical |
+| 7 | The split moved code without changing it | Sorted list of all 173 bin test names identical before and after; `--help` for `hmn` and every subcommand byte-identical to a build of the previous commit |
+| 8 | The walker preserves behaviour | `debug-output` `DXGI` traces from the 16 ignored live tests identical to a build of the previous commit; clippy across five `dxgi` feature combinations |
+| 9a | The guard really forbids use-after-shutdown | Mutation — an `NVML` call after `drop(session)` — rejected with `E0505`; `NVML` traces identical to the previous build; live tests on Windows and Linux |
+| 9b | The table renderer is byte-identical | Probes on fixtures including multibyte names and empty inputs: 1,247 bytes, identical |
+
+Ubuntu WSL2 ran the same gates after items 5, 7 and 9a (the ones compiling code Linux builds) and
+once more at the end; MSRV 1.88 clippy ran after items 2, 8 and 9a, and at the end. Not verifiable
+here: macOS (`metal.rs` untouched by all nine items; the macOS CI leg covers it on push).
 
 ### Withdrawn on inspection
 
