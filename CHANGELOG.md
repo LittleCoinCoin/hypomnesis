@@ -82,6 +82,22 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   the previous commit. The skip trace no longer names which lookup was walking (there is now one
   walker). `CONVENTIONS.md` Pattern 3 now routes all new enumeration through the walker. Audit
   item 8/9.
+- **`NvmlSession` makes `NVML` init/shutdown pairing structural** (`src/gpu/nvml.rs`,
+  `CONVENTIONS.md`) — `query`, `list_compute_processes` and `device_count` each hand-rolled the
+  library load, the `nvmlInit_v2` / `nvmlShutdown` symbol lookups and init, then placed a
+  `shutdown()` call on every later return path, guarded by a comment repeated in each: *"From
+  here, every return path MUST call shutdown."* The pairing was correct (re-verified by the audit);
+  it is now guaranteed by a type instead. `NvmlSession::open` returns a session only after a
+  successful init, and its `Drop` calls `nvmlShutdown` exactly once, on every path. The entry
+  points end their session with an explicit `drop(session)` at the same point they used to call
+  `shutdown()`, so call order is unchanged, and because every resolved symbol borrows the session,
+  an `NVML` call after that line no longer compiles (verified by mutation: `E0505`). Verified
+  behaviour-preserving: `debug-output` `NVML` traces from the live tests are identical to a build
+  of the previous commit, and all 9 live-GPU tests pass on Windows and on Linux (WSL2), where
+  `list_compute_processes` runs. Two incidental differences: an entry point's own symbols are now
+  resolved after `nvmlInit_v2` rather than before, so a missing symbol costs one balanced
+  init/shutdown pair before the same `None`; and the init-failure trace names its caller for
+  `query` too. Audit item 9/9 (part 1).
 
 ### Fixed
 

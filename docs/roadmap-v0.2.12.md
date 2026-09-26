@@ -48,7 +48,7 @@ contract only after a parity test guards the first four.
 | 6 | One `SpillReport` JSON field writer replacing four spellings | refactor | ✅ |
 | 7 | Split `src/bin/hmn.rs` per subcommand into `src/bin/hmn/` | refactor | ✅ |
 | 8 | One `DXGI` adapter walker (visitor closure) for all six walks | refactor | ✅ |
-| 9 | `NvmlSession` RAII guard; one column-table renderer | refactor | ⏳ |
+| 9 | `NvmlSession` RAII guard; one column-table renderer | refactor | ⏳ (1 of 2 done) |
 
 Design decisions taken before starting, and why:
 

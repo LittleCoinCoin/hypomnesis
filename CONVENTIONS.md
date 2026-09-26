@@ -282,7 +282,12 @@ library load, symbol lookup, and call. Conventions:
 - Hold the `Library` for the duration of all calls; don't load and
   re-load per query.
 - Initialize (`nvmlInit_v2`) and shut down (`nvmlShutdown`) in matched
-  pairs — on every return path, including error paths.
+  pairs — on every return path, including error paths. Since v0.2.12
+  this is structural: open an `NvmlSession` (`src/gpu/nvml.rs`), which
+  inits on `open` and shuts down on `Drop`; never place `shutdown()`
+  calls by hand. End a session early with an explicit `drop(session)`
+  — its symbols borrow it, so the compiler rejects any `NVML` call
+  after that line.
 - Treat `nvmlReturn_t` constants (`NVML_SUCCESS = 0`,
   `NVML_ERROR_INSUFFICIENT_SIZE = 7`) as named consts, not magic numbers.
 

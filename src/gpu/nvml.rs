@@ -12,7 +12,10 @@
 //! - [`list_compute_processes`] — every compute process on a given
 //!   device (used by `crate::gpu_processes`).
 //!
-//! Each entry point performs its own `nvmlInit_v2` / `nvmlShutdown` pair.
+//! Each entry point opens its own [`NvmlSession`] — `nvmlInit_v2` on
+//! open, `nvmlShutdown` on drop, so the pairing holds on every return
+//! path by construction (since v0.2.12; before that, each entry point
+//! placed its own `shutdown()` calls by hand).
 //! Per the v0.1 design, this trades a few milliseconds of init overhead
 //! per call for simpler lifecycle management; a long-lived `NVML` context
 //! is a candidate for a later release (see `ROADMAP.md`).
@@ -214,6 +217,78 @@ type NvmlDeviceGetNameFn = unsafe extern "C" fn(NvmlDevice, *mut std::ffi::c_cha
 /// machine.
 type NvmlSystemGetDriverVersionFn = unsafe extern "C" fn(*mut std::ffi::c_char, u32) -> u32;
 
+/// An initialized `NVML` session: the loaded library, plus the
+/// `nvmlShutdown` entry point its [`Drop`] calls.
+///
+/// Makes `CONVENTIONS.md`'s "init and shutdown in matched pairs, on every
+/// return path" structural rather than hand-maintained: [`Self::open`]
+/// returns a session only if `nvmlInit_v2` succeeded, and dropping it calls
+/// `nvmlShutdown` exactly once — on early returns, `?` and unwinding alike.
+/// Symbols resolved from [`Self::lib`] borrow the session, so an explicit
+/// `drop(session)` also makes the borrow checker reject any `NVML` call
+/// placed after it. Each entry point opens its own session (per-call
+/// init/shutdown, as since v0.1).
+struct NvmlSession {
+    /// `nvmlShutdown`, copied out of its `Symbol` so [`Drop`] can call it
+    /// without re-borrowing `lib`. Valid while `lib` stays loaded, which
+    /// `Drop::drop` guarantees: it runs before any field is dropped.
+    shutdown: NvmlShutdownFn,
+    /// The loaded `NVML` shared library; unloaded when the session drops,
+    /// after `shutdown` has run.
+    lib: libloading::Library,
+}
+
+impl NvmlSession {
+    /// Load `NVML`, resolve `nvmlInit_v2` and `nvmlShutdown`, and
+    /// initialize. `None` if any step fails — with a `debug-output` trace
+    /// naming `caller` when it is the init call itself — and in every such
+    /// case there is nothing to shut down.
+    #[allow(unsafe_code)]
+    fn open(caller: &str) -> Option<Self> {
+        // SAFETY: libloading::Library::new dynamically loads a shared library.
+        // NVML is a stable NVIDIA driver component with a well-defined C ABI;
+        // the library is reference-counted by the OS and unloaded when the
+        // session (which owns `lib`) is dropped.
+        let lib = unsafe { libloading::Library::new(NVML_LIB_PATH) }.ok()?;
+        // SAFETY: symbol names match the documented NVML C API exactly, and
+        // the type aliases match the NVML header definitions. The copied-out
+        // function pointers are only called while `lib` is loaded: `init`
+        // right here, `shutdown` from Drop (see the struct doc).
+        let init: NvmlInitFn = *unsafe { lib.get::<NvmlInitFn>(b"nvmlInit_v2\0") }.ok()?;
+        let shutdown: NvmlShutdownFn =
+            *unsafe { lib.get::<NvmlShutdownFn>(b"nvmlShutdown\0") }.ok()?;
+
+        // SAFETY: nvmlInit_v2 is reentrant + thread-safe; it initializes
+        // internal NVML state. NVML_SUCCESS (0) is the success return code.
+        let ret = unsafe { init() };
+        if ret != NVML_SUCCESS {
+            #[cfg(feature = "debug-output")]
+            eprintln!("[NVML debug] nvmlInit_v2 returned {ret} in {caller}");
+            #[cfg(not(feature = "debug-output"))]
+            let _ = caller;
+            return None;
+        }
+        Some(Self { shutdown, lib })
+    }
+
+    /// The loaded library, for resolving an entry point's own symbols.
+    const fn lib(&self) -> &libloading::Library {
+        &self.lib
+    }
+}
+
+impl Drop for NvmlSession {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: a session exists only if nvmlInit_v2 returned NVML_SUCCESS
+        // in `open`, so this balances exactly one successful init.
+        // `self.shutdown` came from `self.lib`, which is still loaded here:
+        // Drop::drop runs before any field is dropped. The return code is
+        // discarded — there is nothing useful to do on a failed teardown.
+        unsafe { (self.shutdown)() };
+    }
+}
+
 /// Combined result of a single `NVML` query for a given device index.
 ///
 /// Returned by [`query`].
@@ -260,18 +335,12 @@ pub(super) struct NvmlQueryResult {
 /// fails, the function returns `None`.
 #[allow(unsafe_code)]
 pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
-    // SAFETY: libloading::Library::new dynamically loads a shared library.
-    // NVML is a stable NVIDIA driver component with a well-defined C ABI;
-    // the library is reference-counted by the OS and unloaded when `lib`
-    // is dropped at scope exit.
-    let lib = unsafe { libloading::Library::new(NVML_LIB_PATH) }.ok()?;
+    let session = NvmlSession::open("query")?;
+    let lib = session.lib();
 
     // SAFETY: Loading function symbols from the NVML library. Each name
     // matches the documented NVML C API exactly. The function signatures
     // (type aliases above) match the NVML header definitions.
-    let init: libloading::Symbol<'_, NvmlInitFn> = unsafe { lib.get(b"nvmlInit_v2\0") }.ok()?;
-    let shutdown: libloading::Symbol<'_, NvmlShutdownFn> =
-        unsafe { lib.get(b"nvmlShutdown\0") }.ok()?;
     let get_handle: libloading::Symbol<'_, NvmlDeviceGetHandleByIndexFn> =
         unsafe { lib.get(b"nvmlDeviceGetHandleByIndex_v2\0") }.ok()?;
     let get_memory: libloading::Symbol<'_, NvmlDeviceGetMemoryInfoFn> =
@@ -281,17 +350,6 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
     let get_name: libloading::Symbol<'_, NvmlDeviceGetNameFn> =
         unsafe { lib.get(b"nvmlDeviceGetName\0") }.ok()?;
 
-    // SAFETY: nvmlInit_v2 is reentrant + thread-safe; it initializes
-    // internal NVML state. NVML_SUCCESS (0) is the success return code.
-    let ret = unsafe { init() };
-    if ret != NVML_SUCCESS {
-        #[cfg(feature = "debug-output")]
-        eprintln!("[NVML debug] nvmlInit_v2 returned {ret}");
-        return None;
-    }
-
-    // From here, every return path MUST call shutdown to balance the init.
-
     // SAFETY: nvmlDeviceGetHandleByIndex_v2 writes a valid opaque handle
     // into `device` when it returns NVML_SUCCESS. The pointer is owned
     // by NVML (we treat it as opaque).
@@ -300,8 +358,6 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
         eprintln!("[NVML debug] nvmlDeviceGetHandleByIndex_v2(idx={idx}) returned {ret}");
-        // SAFETY: nvmlShutdown is always safe to call after a successful nvmlInit.
-        unsafe { shutdown() };
         return None;
     }
 
@@ -317,8 +373,6 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
         eprintln!("[NVML debug] nvmlDeviceGetMemoryInfo returned {ret}");
-        // SAFETY: nvmlShutdown after init.
-        unsafe { shutdown() };
         return None;
     }
 
@@ -329,17 +383,18 @@ pub(super) fn query(idx: u32) -> Option<NvmlQueryResult> {
     // `None` on pre-R510 drivers (the `_v2` symbol is absent) or any v2
     // failure. The v1 total/free/used above remain the source of truth and
     // stay `nvidia-smi`-consistent regardless.
-    let reserved_bytes = read_device_reserved(&lib, device);
+    let reserved_bytes = read_device_reserved(lib, device);
 
     // Driver version (best-effort, additive, system-level). Read from the
     // already-open `lib`; independent of the device handle.
-    let driver_version = read_driver_version(&lib);
+    let driver_version = read_driver_version(lib);
 
     // Per-process query (best-effort; can fail under WDDM as NVML_VALUE_NOT_AVAILABLE).
     let process_used_bytes = read_process_used(&get_processes, device, mem_info.total);
 
-    // SAFETY: nvmlShutdown balances the matched nvmlInit_v2.
-    unsafe { shutdown() };
+    // Every NVML call is done: end the session (nvmlShutdown) here, before
+    // the result is assembled, as the code has always done.
+    drop(session);
 
     #[cfg(feature = "debug-output")]
     eprintln!(
@@ -666,29 +721,16 @@ fn filter_process_rows(infos: &[NvmlProcessInfo], device_total: u64) -> Vec<(u32
 #[allow(unsafe_code)]
 #[must_use]
 pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
-    // SAFETY: same justification as in `query`.
-    let lib = unsafe { libloading::Library::new(NVML_LIB_PATH) }.ok()?;
+    let session = NvmlSession::open("list_compute_processes")?;
+    let lib = session.lib();
 
-    // SAFETY: same — symbol names match the documented NVML C API.
-    let init: libloading::Symbol<'_, NvmlInitFn> = unsafe { lib.get(b"nvmlInit_v2\0") }.ok()?;
-    let shutdown: libloading::Symbol<'_, NvmlShutdownFn> =
-        unsafe { lib.get(b"nvmlShutdown\0") }.ok()?;
+    // SAFETY: symbol names match the documented NVML C API.
     let get_handle: libloading::Symbol<'_, NvmlDeviceGetHandleByIndexFn> =
         unsafe { lib.get(b"nvmlDeviceGetHandleByIndex_v2\0") }.ok()?;
     let get_memory: libloading::Symbol<'_, NvmlDeviceGetMemoryInfoFn> =
         unsafe { lib.get(b"nvmlDeviceGetMemoryInfo\0") }.ok()?;
     let get_processes: libloading::Symbol<'_, NvmlDeviceGetComputeRunningProcessesFn> =
         unsafe { lib.get(b"nvmlDeviceGetComputeRunningProcesses_v3\0") }.ok()?;
-
-    // SAFETY: nvmlInit_v2 is reentrant + thread-safe.
-    let ret = unsafe { init() };
-    if ret != NVML_SUCCESS {
-        #[cfg(feature = "debug-output")]
-        eprintln!("[NVML debug] nvmlInit_v2 returned {ret} in list_compute_processes");
-        return None;
-    }
-
-    // From here, every return path MUST call shutdown to balance the init.
 
     // SAFETY: nvmlDeviceGetHandleByIndex_v2 writes a valid opaque handle
     // into `device` when it returns NVML_SUCCESS.
@@ -700,8 +742,6 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
             "[NVML debug] nvmlDeviceGetHandleByIndex_v2(idx={idx}) returned {ret} \
              in list_compute_processes"
         );
-        // SAFETY: nvmlShutdown is always safe to call after a successful nvmlInit.
-        unsafe { shutdown() };
         return None;
     }
 
@@ -716,8 +756,6 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
     if ret != NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
         eprintln!("[NVML debug] nvmlDeviceGetMemoryInfo returned {ret} in list_compute_processes");
-        // SAFETY: nvmlShutdown after init.
-        unsafe { shutdown() };
         return None;
     }
     let device_total = mem_info.total;
@@ -742,10 +780,10 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
     let ret = unsafe { get_processes(device, &raw mut count, stack_infos.as_mut_ptr()) };
 
     // ---- Second attempt: heap buffer sized to NVML's reported count -------
-    // Only taken when the fast path was too small. `shutdown()` is
-    // deferred until after this retry — the device/session handle must
-    // stay valid for it, unlike the pre-fix code which shut down NVML
-    // immediately after the single attempt.
+    // Only taken when the fast path was too small. The session is kept
+    // open until after this retry — the device handle must stay valid for
+    // it, unlike the pre-v0.2.10 code which shut down NVML immediately
+    // after the single attempt.
     //
     // Three-way split (retry / fast-path-hard-error / fast-path-success)
     // rather than a two-way one: a hard error on *either* attempt takes
@@ -823,9 +861,9 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
             (rows, ret, count)
         };
 
-    // SAFETY: nvmlShutdown balances the matched nvmlInit_v2 — deferred
-    // until every get_processes attempt (including the retry) is done.
-    unsafe { shutdown() };
+    // End the session (nvmlShutdown) only now that every get_processes
+    // attempt, including the retry, is done.
+    drop(session);
 
     if final_ret != NVML_SUCCESS && final_ret != NVML_ERROR_INSUFFICIENT_SIZE {
         #[cfg(feature = "debug-output")]
@@ -856,30 +894,18 @@ pub(super) fn list_compute_processes(idx: u32) -> Option<Vec<(u32, u64)>> {
 /// available) for bounds-checking `idx` in `device_info`.
 #[allow(unsafe_code)]
 pub(super) fn device_count() -> Option<u32> {
-    // SAFETY: same justifications as in `query`.
-    let lib = unsafe { libloading::Library::new(NVML_LIB_PATH) }.ok()?;
+    let session = NvmlSession::open("device_count")?;
 
-    // SAFETY: same — symbol names match the documented NVML C API.
-    let init: libloading::Symbol<'_, NvmlInitFn> = unsafe { lib.get(b"nvmlInit_v2\0") }.ok()?;
-    let shutdown: libloading::Symbol<'_, NvmlShutdownFn> =
-        unsafe { lib.get(b"nvmlShutdown\0") }.ok()?;
+    // SAFETY: symbol name matches the documented NVML C API.
     let get_count: libloading::Symbol<'_, NvmlDeviceGetCountFn> =
-        unsafe { lib.get(b"nvmlDeviceGetCount_v2\0") }.ok()?;
-
-    // SAFETY: nvmlInit_v2 is reentrant + thread-safe.
-    let ret = unsafe { init() };
-    if ret != NVML_SUCCESS {
-        #[cfg(feature = "debug-output")]
-        eprintln!("[NVML debug] nvmlInit_v2 returned {ret} in device_count");
-        return None;
-    }
+        unsafe { session.lib().get(b"nvmlDeviceGetCount_v2\0") }.ok()?;
 
     let mut count: u32 = 0;
     // SAFETY: nvmlDeviceGetCount_v2 writes one u32 to the caller-provided pointer.
     let ret = unsafe { get_count(&raw mut count) };
 
-    // SAFETY: nvmlShutdown balances the matched nvmlInit_v2.
-    unsafe { shutdown() };
+    // The only NVML call is done: end the session (nvmlShutdown).
+    drop(session);
 
     if ret == NVML_SUCCESS {
         #[cfg(feature = "debug-output")]
