@@ -2,7 +2,8 @@
 
 *Attach to a PID that's already hours into its run, read the live SPILL
 column, script a watchdog off the exit code — or stand guard over a whole
-machine while arbitrary work comes and goes.*
+machine while arbitrary work comes and goes, following just the program you
+care about.*
 
 This tutorial picks up where [Is my run spilling?](is-my-run-spilling.md)
 leaves off. That one wraps a **new** command with `hmn spill -- <command>`.
@@ -10,7 +11,10 @@ This one covers the two situations it can't. You walk up to a machine that's
 already been running for hours and ask "is *this* spilling?" — with no way to
 restart it under a wrapper (Steps 1–3). Or you want to watch a machine
 through a whole suite of short-lived jobs that don't exist yet
-([Step 4](#step-4--stand-guard-over-a-whole-machine---follow-new)).
+([Step 4](#step-4--stand-guard-over-a-whole-machine---follow-new)) — and, when
+that capture is going to be kept, record only your own program rather than
+whatever else the desktop is doing
+([Step 5](#step-5--follow-one-program-not-the-whole-machine---filter)).
 
 ## The problem `hmn spill` can't solve
 
@@ -221,6 +225,89 @@ The flag landed in **v0.2.7**; on an older `hmn` it fails as an unknown
 argument (`cargo install hypomnesis --force` to upgrade — see the
 [FAQ](../FAQ.md#how-do-i-upgrade-hmn-why-does-cargo-install-keep-the-old-version)).
 
+## Step 5 — Follow one program, not the whole machine (`--filter`)
+
+`--follow-new` fixes *when* `hmn watch` selects. It still selects by rank —
+the top `--top` by committed `VRAM` — and rank cannot say "follow this
+program". Whatever else the desktop is doing competes for those slots. A
+candle-mi dogfooding report
+([2026-09-21](../dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md))
+ran `--follow-new --top 3` beside a 34-process patching campaign, committed
+the captures to a public repository as experimental record, and found
+**73.9% of the rows were the desktop** — the compositor, a browser, a
+messaging client — rather than the workload.
+
+`--filter` narrows the choice by name (since **v0.2.12**). The pattern is a
+case-insensitive substring, so `spillforge` matches `spillforge.exe`, and it
+is re-applied every interval under `--follow-new`, so it survives the workload
+restarting under new PIDs. Below, the watch starts before the job does:
+
+```
+$ hmn watch --follow-new --top 3 --filter spillforge --interval 3s --duration 27s
+hmn: watch found no GPU processes on device 0 yet (top 3 by committed among names containing "spillforge" (case-insensitive)); waiting for work to appear
+hmn watch: device 0 [NVIDIA GeForce RTX 5060 Ti], interval 3.0s, following top 3 by committed among names containing "spillforge" (case-insensitive) (re-selected every interval), 0 initially
+TIME      PID     NAME          COMMITTED  ΔCOMMIT    SHARED     ΔSHARED    SPILL
+hmn watch: +6.6s followed set changed: entered pid=24024 (spillforge.exe)
++6.6s     24024  spillforge.exe  8.0 GiB    +0 B      97 MiB  +0 B      no
++9.6s     24024  spillforge.exe  8.0 GiB    +0 B      97 MiB  +0 MiB    no
++12.6s    24024  spillforge.exe  8.0 GiB    +0 B      98 MiB  +0 MiB    no
++15.7s    24024  spillforge.exe  8.0 GiB    +0 B      98 MiB  +0 MiB    no
+hmn watch: +18.7s followed set changed: left pid=24024 (spillforge.exe)
+hmn watch: peak dedicated 9.8 GiB / 15.7 GiB
+           peak shared    187 MiB (baseline 89 MiB)
+           episodes       0 — no spill observed
+hmn watch: per-PID  PID    NAME            BASELINE COMMIT  PEAK COMMIT  BASELINE SHARED  PEAK SHARED
+                    24024  spillforge.exe  8.0 GiB          8.0 GiB      97 MiB           98 MiB
+```
+
+*(Real output, reference RTX 5060 Ti. `firefox.exe` (4.5 GiB) and `dwm.exe`
+(1.1 GiB) held GPU memory throughout; under `--top 3` alone both would have
+taken a slot, and neither appears. The workload stayed under the saturation
+threshold, so no spill — the point here is what was recorded.)*
+
+What to notice:
+
+- **The header says how the capture was selected.** The criterion is part of
+  the header line, so a capture read back months later — or by someone else —
+  still says it was filtered, and by what. Without `--filter` the header is
+  exactly what it always was.
+- **Starting empty is fine.** With `--follow-new`, nothing matching at attach
+  just means "not yet". Without `--follow-new`, the same situation is a hard
+  error (exit `2`), because a one-shot selection that selects nothing has
+  nothing to watch.
+- **Repeat the flag for a campaign spanning several binaries**:
+  `--filter train --filter eval` follows both. Add **`--min <SIZE>`** to also
+  require a footprint (`used + shared`, exactly as `hmn ps --min` measures it)
+  — but treat a size floor as a complement to `--filter`, not a substitute: on
+  the report's own data, no single threshold kept every workload row *and*
+  excluded every desktop row.
+
+Name filtering has one failure mode that rank-based selection doesn't: a
+process whose name can't be resolved can't match. `hmn watch` guards it both
+ways. A followed process whose name briefly reads `[protected]` or `[exited]`
+keeps matching on the last name it resolved to; a process whose name never
+resolved is announced once on stderr —
+`hmn watch: pid=N has no resolvable name; --filter cannot match it` — rather
+than dropped without a word.
+
+With `--json`, the first line is now a `start` record carrying the same
+information — and more, because a JSON file is often kept while the stderr
+stream is thrown away:
+
+```json
+{"kind":"start","t_ms":0,"wall_clock":"2026-09-26T11:49:11.504Z","hmn_version":"0.2.11","argv":["hmn.exe","watch","--follow-new","--top","3","--filter","spillforge","--interval","3s","--duration","1s","--json"],"device":0,"device_name":"NVIDIA GeForce RTX 5060 Ti","interval_ms":3000,"duration_ms":1000,"selection":{"mode":"follow_new","pids":[],"top":3,"filters":["spillforge"],"min_bytes":null}}
+```
+
+*(Real output from a pre-release build, hence `0.2.11`.)* It also makes a cut
+capture detectable from the file alone: a `start` record with no closing
+`summary` means the watch was killed before it finished, or the file was
+copied mid-run. `argv` records the program by file name only, never its full
+path, so a committed capture does not publish your user name.
+
+`--filter`, `--min` and explicit PIDs don't mix: explicit PIDs are watched
+exactly as given, so combining them with either flag (or with `--follow-new`)
+is a hard error (exit `2`).
+
 ## Gotchas specific to `watch`
 
 - **Frozen vs. dynamic PID sets.** By default, `hmn watch` keeps the same PID
@@ -230,6 +317,10 @@ argument (`cargo install hypomnesis --force` to upgrade — see the
   `--follow-new`, and the
   [FAQ](../FAQ.md#why-doesnt-hmn-watch-show-processes-that-start-after-i-attach)
   for the short version.
+- **Rank vs. identity.** Auto-selection ranks by committed `VRAM`, so the
+  desktop competes for every slot `--top` offers. To record only your own
+  program, add `--filter <name>` — see
+  [Step 5](#step-5--follow-one-program-not-the-whole-machine---filter).
 - **A `0 B` / `0 B` row doesn't mean the process exited.** `hmn watch` can't
   distinguish "PID exited" from "PID alive but currently holds no GPU memory
   on this device" — a watched PID simply renders zeroed that interval either

@@ -4,7 +4,8 @@
 
 **Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items in ten commits,
 then a `PDH` error-wording follow-up and a consistency pass; pushed at `ed2c2aa`, CI green. Part 2
-(dogfooding features) under way.
+(dogfooding features) ✅ implemented 2026-09-26, not yet pushed or released — see *At release*,
+below.
 
 ---
 
@@ -185,7 +186,46 @@ detectable from the file alone.
 | 2 | `hmn watch --filter <PATTERN>` + criterion on the header (requests 1 and 3) | feature | ✅ |
 | 3 | `hmn watch --min <SIZE>` + criterion on the header (requests 2 and 3) | feature | ✅ |
 | 4 | `{"kind":"start", ...}` first record of `--json` (observation 1) | feature | ✅ |
-| 5 | README, FAQ, tutorial, roadmap close-out | docs | ⏳ |
+| 5 | README, FAQ, tutorial, roadmap close-out | docs | ✅ |
+
+### Deviations from the plan, and why
+
+- **One more refactor commit: `json_string_or_null` / `json_value_or_null`.** The `start` record
+  was about to add four more copies of a four-line "optional JSON value" idiom that already
+  existed ten times — short enough to slip under part 1's six-line detector window. Extracted
+  first, byte-identical.
+- **`argv[0]` is reduced to its file name.** The first live run of the `start` record recorded the
+  full executable path — the operator's user name and directory layout — in a record designed to
+  be committed publicly, the very privacy concern the report raises. Caught live, fixed before
+  commit.
+- **A dead lint allow on the live tests' `spillforge_path` helper**, in all three copies (one of
+  them new in item 4), found by the same `#[expect]` check part 1 introduced. Removed in its own
+  commit.
+
+### Verification
+
+- Every commit passed the full gate set on Windows; MSRV 1.88 clippy ran after items 2 and 3.
+- Unit tests: 28 new across part 2 (295 → 323; 289 → 323 over the release) — the guards, the header clauses
+  (with the no-flag strings pinned byte-identical to v0.2.11's), filter-then-top-N ordering, the
+  OR of patterns, the sticky name through a `[protected]` flicker, unmatchable reporting and its
+  once-only notice, `--min`'s `used + shared` semantics and its place before the filter, the exact
+  bytes of the `start` record in each mode, and `argv[0]` reduction on both platforms.
+- Live on the RTX 5060 Ti: `--filter FIREFOX` follows only `firefox.exe`; no match exits `2`
+  one-shot and waits under `--follow-new`; `--filter dwm --min 1GiB` composes; each explicit-PID
+  guard exits `2`; the text header and the `--json` first line carry the criterion.
+- A new `#[ignore]` live test, `tests/live_watch_filter.rs`, is the report's own regression case:
+  `--follow-new --top 3 --filter SpillForge` over a real `spillforge` run records only
+  `spillforge.exe` — 100% workload rows — with the `start` record first. The existing
+  `live_watch` and `live_watch_follow_new` tests still pass with the new first line in the
+  stream.
+
+### At release
+
+- Bump `Cargo.toml` to `0.2.12`; flip this roadmap's status and the dogfooding report's `Status`
+  line (`✅ Resolved in v0.2.12`), per the dogfooding style guide.
+- Rotate the README's "what's new" banner (new 🆕, previous to 🚀, drop the oldest of three).
+- Refresh the `start`-record sample in the watch tutorial's Step 5, captured from a pre-release
+  build and so reading `"hmn_version":"0.2.11"`.
 
 ---
 

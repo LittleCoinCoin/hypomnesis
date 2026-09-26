@@ -219,6 +219,13 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
 
 ### Documentation
 
+- **`hmn watch --filter` / `--min` and the `start` record, documented** (`README.md`,
+  `docs/tutorials/watching-a-running-job.md`, `docs/FAQ.md`) — the README's `hmn watch` section
+  covers both flags, the header criterion and the new first `--json` record (with a
+  `select(.kind == "sample")` note for scripts that assumed line 1 is a sample); the watch
+  tutorial gains Step 5, "Follow one program, not the whole machine", built on real output from
+  the reference machine; the FAQ gains "How do I make `hmn watch` record only my own job, not the
+  desktop?". Part 2, item 5.
 - **`MemoryReport` says what its `MB` means** (`src/report.rs`, `README.md`) — `ram_delta_mb`,
   `vram_delta_mb`, `format_delta` and `format_before_after` report and print `MiB`
   (`bytes / 1_048_576`) under an `MB` label kept for `candle-mi` parity. Every other `report`

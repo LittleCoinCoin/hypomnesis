@@ -33,7 +33,7 @@
 > - **What's eating my GPU memory right now?** → [`hmn ps`](#binary-hmn) — every process holding GPU memory, with dedicated-commit and resident-shared columns, on Windows, Linux, and macOS.
 > - **Will my next job fit before I launch it?** → [`hmn fits <SIZE>`](#hmn-fits--headroom-predicate-since-v0211) — one gateable exit code, instead of hand-rolling a `jq` check per script.
 > - **Is my training / inference run spilling into system RAM?** (Windows / `WDDM` only — spilling into a *separate* shared budget is a `WDDM` architectural concept; Linux gets a `CUDA` OOM instead, macOS `UMA` has nothing to spill *into*) → the [Is my run spilling?](docs/tutorials/is-my-run-spilling.md) tutorial — wrap the run with [`hmn spill`](#hmn-spill--wddm-spill-detection), read the episode pattern, react.
-> - **Is a job that's already running spilling?** (Windows / `WDDM` only, same reason as above) → the [watch tutorial](docs/tutorials/watching-a-running-job.md) — [`hmn watch <pid>`](#hmn-watch--attach-to-a-running-pid) attaches directly, no restart needed.
+> - **Is a job that's already running spilling?** (Windows / `WDDM` only, same reason as above) → the [watch tutorial](docs/tutorials/watching-a-running-job.md) — [`hmn watch <pid>`](#hmn-watch--attach-to-a-running-pid) attaches directly, no restart needed; `hmn watch --follow-new --filter <name>` records only your own program, across restarts.
 > - **I want to measure my own process from Rust** → [Usage](#usage) — `Snapshot::now(0)`: process RSS + device-wide + per-process GPU in one call.
 > - **I want my loop to stop (or adapt) when spill starts** → `SpillTracker` on [docs.rs](https://docs.rs/hypomnesis) — `observe()` per step, a latched `has_spilled()` to early-stop, an instantaneous `is_spilling()` to adapt; portable via `is_spill_measurable()`.
 > - **My numbers look wrong** — `used_bytes` above the card's total, a nonzero SHARED column, all-zeros on Linux/macOS → the [FAQ](docs/FAQ.md), most of it is measured reality, not a bug.
@@ -324,6 +324,7 @@ scope-discipline reasoning applied to "why not a live-refresh dashboard"):
 hmn watch 21844                          # attach to a known PID
 hmn watch                                # no PID: auto-select top 5 by committed VRAM
 hmn watch --top 3 --interval 30s --duration 10m --json   # tune interval/window, stream JSONL
+hmn watch --follow-new --filter train --json             # follow one program by name (v0.2.12)
 ```
 
 With no PID, `hmn watch` auto-selects the top `--top` (default 5) processes
@@ -350,6 +351,24 @@ roster of everyone who mattered during the watch, not just whoever was on
 top at `t=0`. A stderr breadcrumb reports each change
 (`entered pid=... (name); left pid=... (name)`).
 
+**`--filter <PATTERN>` and `--min <SIZE>`** (since v0.2.12, auto-select mode
+only) change *what* is selected, where `--follow-new` changes *when*. Rank
+alone cannot say "follow this program": a candle-mi dogfooding report ran
+`--follow-new --top 3` beside a patching campaign and found 73.9% of the rows
+it committed as experimental record were the desktop
+([`docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md`](docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md)).
+`--filter` keeps only processes whose name contains the pattern, ignoring case
+(repeat it to accept several); `--min` keeps only those whose total footprint
+(`used + shared`, exactly as `hmn ps --min` measures it) reaches SIZE; the top
+`--top` of what remains are watched, re-selected every interval under
+`--follow-new`. The active criterion is printed on the stderr header line, so
+a saved capture still says how it was selected. A process whose name cannot be
+resolved cannot match a filter: a followed one whose name briefly reads
+`[protected]` keeps matching on its last resolved name, and one that never
+resolved is announced once on stderr rather than dropped silently. A size
+floor is a proxy for identity — use it alongside `--filter`, not instead of
+it. Either flag combined with an explicit PID is a hard error (exit `2`).
+
 Runs until `--duration` elapses or Ctrl+C, then prints a closing summary
 (the same `SpillReport` shape as `hmn spill`, plus a per-PID peak/baseline
 table) and exits **`0`** if spill was never observed, **`1`** if it was at
@@ -361,10 +380,15 @@ hmn watch 21844 --duration 5m
 [ $? -eq 1 ] && echo "spilled in the last 5 minutes"
 ```
 
-`--json` streams JSON Lines to stdout — one `{"kind":"sample",...}` object
+`--json` streams JSON Lines to stdout — since v0.2.12 a first
+`{"kind":"start",...}` object describing the run (`hmn_version`, the
+invocation, device, interval, and the `selection`: mode, explicit PIDs, `top`,
+`--filter` patterns, `--min` bytes), then one `{"kind":"sample",...}` object
 per PID per interval as it happens, plus a final `{"kind":"summary",...}`
 object (the `SpillReport` fields plus `per_pid[]`) when the watch ends;
-pipeable to `jq -c` live. Each sample carries `t_ms` (relative to attach)
+pipeable to `jq -c` live. A capture with a `start` record but no `summary`
+was cut short. Select records by `kind` — a script that assumed line 1 is a
+`sample` must skip the `start` record (`jq -c 'select(.kind == "sample")'`). Each sample carries `t_ms` (relative to attach)
 and, since v0.2.11, `wall_clock` (absolute UTC ISO-8601 with millisecond
 precision, e.g. `"2026-09-14T10:12:03.482Z"`) — for joining a spill trace
 against a log stamped with real time, like a training driver's own run

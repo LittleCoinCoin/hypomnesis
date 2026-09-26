@@ -7,6 +7,7 @@ the authoritative source (README limitation, rustdoc, or per-release roadmap).
 - [Why does `used_bytes` exceed my card's total VRAM?](#why-does-used_bytes-exceed-my-cards-total-vram)
 - [`hmn spill` or `hmn watch` — which do I use?](#hmn-spill-or-hmn-watch--which-do-i-use)
 - [Why doesn't `hmn watch` show processes that start after I attach?](#why-doesnt-hmn-watch-show-processes-that-start-after-i-attach)
+- [How do I make `hmn watch` record only my own job, not the desktop?](#how-do-i-make-hmn-watch-record-only-my-own-job-not-the-desktop)
 - [What do the `hmn ps --sort <KEY>` keys mean, and which should I use?](#what-do-the-hmn-ps---sort-key-keys-mean-and-which-should-i-use)
 - [Why is the SHARED column nonzero when nothing is wrong?](#why-is-the-shared-column-nonzero-when-nothing-is-wrong)
 - [How does hypomnesis decide a run is spilling?](#how-does-hypomnesis-decide-a-run-is-spilling)
@@ -95,6 +96,37 @@ This mode exists because a candle-mi dogfooding report
 ran `hmn watch --duration 80m` alongside 19 sequential `cargo test` steps —
 the adapter-level spill detector fired correctly, but the frozen PID set
 missed every single process that actually caused the spills.
+
+## How do I make `hmn watch` record only my own job, not the desktop?
+
+Add **`--filter <PATTERN>`** (since v0.2.12):
+
+```sh
+hmn watch --follow-new --filter train --json > run.jsonl 2> run.err
+```
+
+Auto-selection normally ranks every GPU process by committed VRAM, so the
+compositor, a browser or a chat client compete for the `--top` slots — in the
+candle-mi campaign that asked for this
+([2026-09-21](dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md)),
+73.9% of the committed rows were the desktop. `--filter` keeps only processes
+whose name contains the pattern (case-insensitive, repeatable), and with
+`--follow-new` it keeps following the program across restarts under new PIDs.
+Two things make the result safe to keep and to publish:
+
+- **It says how it was made.** The stderr header names the filter, and the
+  `--json` stream opens with a `{"kind":"start",...}` record carrying the same
+  selection, the `hmn` version and the invocation — the program recorded by
+  file name only, never by a path that would publish your user name. A file
+  with a `start` record but no closing `summary` was cut short.
+- **It never drops your job silently.** A process whose name can't be resolved
+  can't match; a followed one whose name briefly reads `[protected]` keeps
+  matching on the last name it resolved to, and one that never resolved is
+  named once on stderr.
+
+`--min <SIZE>` adds a footprint floor, but a size is a proxy for identity: use
+it with `--filter`, not instead of it. Walkthrough with real output:
+[Step 5 of the watch tutorial](tutorials/watching-a-running-job.md#step-5--follow-one-program-not-the-whole-machine---filter).
 
 ## What do the `hmn ps --sort <KEY>` keys mean, and which should I use?
 
