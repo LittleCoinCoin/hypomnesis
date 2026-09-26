@@ -3,8 +3,8 @@
 > *Clean the base first, then teach `hmn watch` to follow a process by name.*
 
 **Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items in ten commits,
-then a `PDH` error-wording follow-up and a consistency pass; none pushed yet. Part 2 (dogfooding
-features) not started.
+then a `PDH` error-wording follow-up and a consistency pass; pushed at `ed2c2aa`, CI green. Part 2
+(dogfooding features) under way.
 
 ---
 
@@ -150,12 +150,42 @@ widths in chars, or in display columns if East Asian wide characters are to line
 
 ## Part 2 — `hmn watch` selects by identity
 
-*Not started.* Origin:
+### Origin — `--follow-new` fixed *when* `watch` selects, not *what*
+
 [`docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md`](dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md)
-(candle-mi, 2026-09-21, corrected 2026-09-26). Requests, in the report's own priority order:
-`--filter <SUBSTRING>` composing with `--follow-new`; `--min <SIZE>` on `watch`; the active criterion
-echoed on the `.err` header; and, as an observation, a `{"kind":"start", ...}` record making
-truncated captures detectable from the file alone.
+(candle-mi, 2026-09-21, corrected 2026-09-26): four `hmn watch --follow-new --top 3` captures,
+committed to a public repository as experimental record, were 73.9% desktop rows — selection is by
+VRAM rank, which cannot say "follow this program". Requests, in the report's own priority order:
+`--filter` composing with `--follow-new`; `--min <SIZE>` on `watch`; the active criterion on the
+`.err` header; and, as an observation, a `{"kind":"start", ...}` record making truncated captures
+detectable from the file alone.
+
+### Design decisions taken before starting
+
+- **`--filter` is a case-insensitive substring, repeatable (OR).** Windows process names are
+  case-insensitive, and the report's own example is a stem without `.exe`; a case-sensitive match
+  would silently miss `Python.exe` — the very silent-drop shape the report warns about.
+- **Unresolved names: sticky last-resolved name, plus a one-shot announcement.** A followed PID
+  whose name flickers to `[protected]` keeps matching on the last name it resolved to; a PID that
+  never resolved is announced once on stderr rather than dropped silently.
+- **The `start` record is always the first line of `--json`.** Its value is being present on the
+  run nobody expected to be cut short; an opt-in flag is forgotten exactly then. It is v0.2.12's
+  one deliberate wire-format addition — additive under Principle 2, and no known consumer reads the
+  stream positionally.
+- **`hmn watch` only.** A `--filter` on `hmn ps` would be the fourth `ps` filter, which is what
+  `ROADMAP.md` gates its speculative `PsFilters` refactor on; that deserves its own slot.
+- **One `Selection` value** drives the selection, the header and the `start` record, so what a
+  capture says it selected and what it selected cannot drift apart.
+
+### Scope
+
+| # | Item | Kind | Status |
+|---|---|---|---|
+| 1 | `Selection` type; `footprint_bytes` shared by `ps --min`, `ps --sort total` and `watch --min` | refactor | ✅ |
+| 2 | `hmn watch --filter <PATTERN>` + criterion on the header (requests 1 and 3) | feature | ⏳ |
+| 3 | `hmn watch --min <SIZE>` + criterion on the header (requests 2 and 3) | feature | ⏳ |
+| 4 | `{"kind":"start", ...}` first record of `--json` (observation 1) | feature | ⏳ |
+| 5 | README, FAQ, tutorial, roadmap close-out | docs | ⏳ |
 
 ---
 

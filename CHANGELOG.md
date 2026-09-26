@@ -139,6 +139,16 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   are removed; five modules now carry no preamble at all. The 11 that do fire stay
   (`unwrap_used` ×9, `panic` in `hmn`'s arg-parsing tests, `indexing_slicing` in `spill.rs`).
   `CONVENTIONS.md` now says test modules allow only what they trigger, and how to check it.
+- **`hmn watch` selection is one `Selection` value** (`src/bin/hmn/watch.rs`, `main.rs`) — the
+  explicit / top-N / `--follow-new` modes, their argument validation and the stderr header's
+  description of them now live in one type, ahead of v0.2.12 part 2's `--filter` / `--min`, so
+  what a capture says it selected and what it actually selected are derived from the same value.
+  The `--follow-new` + explicit-PIDs guard moves into `Selection::new`, still checked before any
+  hardware call; its message, the three header clauses and exit codes are byte-identical (pinned
+  by tests). `run_watch` drops from 7 parameters to 5. Part 2, item 1.
+- **One definition of a process's total footprint** (`src/bin/hmn/ps.rs`) — `hmn ps --sort total`
+  and `hmn ps --min` each spelled `used_bytes + shared_used_bytes`; both now call
+  `footprint_bytes`, which `hmn watch --min` will reuse. Part 2, item 1.
 
 ### Fixed
 

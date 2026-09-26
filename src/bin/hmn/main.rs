@@ -57,7 +57,7 @@ use crate::format::{parse_duration, parse_size_bytes};
 use crate::ps::{SortKey, run_ps};
 use crate::spill::run_spill;
 use crate::summary::run_summary;
-use crate::watch::run_watch;
+use crate::watch::{Selection, run_watch};
 
 mod fits;
 mod format;
@@ -407,7 +407,17 @@ fn main() -> std::process::ExitCode {
             follow_new,
             device,
             json,
-        }) => return run_watch(&pids, interval, duration, top, follow_new, device, json),
+        }) => {
+            // Validated before any backend call: an invalid argument
+            // combination fails fast without touching hardware at all.
+            return match Selection::new(&pids, top, follow_new) {
+                Ok(selection) => run_watch(&selection, interval, duration, device, json),
+                Err(msg) => {
+                    eprintln!("hmn: {msg}");
+                    std::process::ExitCode::from(2)
+                }
+            };
+        }
         // `fits` also bypasses the Ok/Err fold: its exit code conveys
         // whether the size fits, not hmn's own success/failure.
         Some(Commands::Fits { size, device }) => return run_fits(size, device),

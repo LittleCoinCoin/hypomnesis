@@ -195,9 +195,9 @@ fn format_delta(bytes: i64) -> String {
 
 /// `u8` exit code conveying whether spill was observed during a watch:
 /// `0` clean, `1` spill observed at least once. Hard-error paths (bad
-/// device, nothing to auto-select, or `--follow-new` combined with
-/// explicit PIDs) return `2` directly from [`run_watch`], bypassing
-/// this mapping.
+/// device or nothing to auto-select, from [`run_watch`]; an invalid
+/// argument combination, from [`Selection::new`] via `main`) return `2`
+/// directly, bypassing this mapping.
 const fn watch_exit_code(spilled: bool) -> u8 {
     if spilled { 1 } else { 0 }
 }
@@ -522,37 +522,101 @@ pub fn format_watch_summary_json(
     out
 }
 
-/// Resolve which PIDs to watch from one sample: `explicit` unchanged
-/// when non-empty (explicit PIDs are always watched exactly as given),
-/// otherwise the top `top` by committed VRAM from `rows` — sharing
-/// `hmn ps`'s own comparator via [`select_top_n_pids`], so the two
-/// orderings can't drift apart.
+/// How `hmn watch` chooses the PIDs it follows.
 ///
-/// Called once before the watch loop always, and again every interval
-/// under `--follow-new` (cheap: `rows` numbers in the tens, and
-/// `--interval` is 5s+ apart by default).
-fn resolve_watched_pids(rows: &[GpuProcessEntry], explicit: &[u32], top: usize) -> Vec<u32> {
-    if !explicit.is_empty() {
-        return explicit.to_vec();
-    }
-    // device_index / device_name / spilling are unused by
-    // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
-    // defaulted rather than threaded through from the caller, which has
-    // no device-name or live-spill context of its own to give.
-    let ps_rows: Vec<PsRow> = rows
-        .iter()
-        .map(|e| PsRow {
-            pid: e.pid,
-            // BORROW: clone — e is borrowed from `rows`.
-            name: e.name.clone(),
-            used_bytes: e.used_bytes,
-            shared_used_bytes: e.shared_used_bytes,
-            device_index: 0,
-            device_name: None,
-            spilling: None,
+/// The one value the selection itself ([`Self::select`]) and the stderr
+/// header's description of it ([`Self::describe`]) are both derived
+/// from, so what a capture *says* it selected and what it actually
+/// selected cannot drift apart. Built by [`Self::new`], which rejects
+/// argument combinations that only make sense for auto-selection before
+/// any hardware is touched.
+pub struct Selection {
+    /// Explicit PIDs from the command line, deduplicated, in the order
+    /// given. Non-empty means explicit mode: exactly these are watched.
+    explicit: Vec<u32>,
+    /// How many processes auto-selection keeps (`--top`). Unused in
+    /// explicit mode.
+    top: usize,
+    /// Whether auto-selection re-runs every interval (`--follow-new`)
+    /// rather than once at attach.
+    follow_new: bool,
+}
+
+impl Selection {
+    /// Build the selection from `hmn watch`'s parsed arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns the user-facing message (without the `hmn: ` prefix) when
+    /// `--follow-new` is combined with explicit PIDs: there is no top-N to
+    /// re-run against a fixed list.
+    pub fn new(pids: &[u32], top: usize, follow_new: bool) -> Result<Self, String> {
+        let mut seen = std::collections::HashSet::new();
+        let explicit: Vec<u32> = pids.iter().copied().filter(|p| seen.insert(*p)).collect();
+        if follow_new && !explicit.is_empty() {
+            return Err(
+                "watch --follow-new only applies to auto-selection; drop --follow-new or \
+                 the explicit PID list"
+                    .to_owned(),
+            );
+        }
+        Ok(Self {
+            explicit,
+            top,
+            follow_new,
         })
-        .collect();
-    select_top_n_pids(&ps_rows, top)
+    }
+
+    /// Resolve which PIDs to watch from one sample: the explicit PIDs
+    /// unchanged in explicit mode (always watched exactly as given),
+    /// otherwise the top `top` by committed VRAM from `rows` — sharing
+    /// `hmn ps`'s own comparator via [`select_top_n_pids`], so the two
+    /// orderings cannot drift apart.
+    ///
+    /// Called once before the watch loop always, and again every interval
+    /// under `--follow-new` (cheap: `rows` numbers in the tens, and
+    /// `--interval` is 5s+ apart by default).
+    #[must_use]
+    fn select(&self, rows: &[GpuProcessEntry]) -> Vec<u32> {
+        if !self.explicit.is_empty() {
+            return self.explicit.clone();
+        }
+        // device_index / device_name / spilling are unused by
+        // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
+        // defaulted rather than threaded through from the caller, which has
+        // no device-name or live-spill context of its own to give.
+        let ps_rows: Vec<PsRow> = rows
+            .iter()
+            .map(|e| PsRow {
+                pid: e.pid,
+                // BORROW: clone — e is borrowed from `rows`.
+                name: e.name.clone(),
+                used_bytes: e.used_bytes,
+                shared_used_bytes: e.shared_used_bytes,
+                device_index: 0,
+                device_name: None,
+                spilling: None,
+            })
+            .collect();
+        select_top_n_pids(&ps_rows, self.top)
+    }
+
+    /// The stderr header's mode clause, given how many PIDs were
+    /// selected at attach — e.g. `following top 3 by committed
+    /// (re-selected every interval), 1 initially`.
+    #[must_use]
+    fn describe(&self, initially: usize) -> String {
+        let top = self.top;
+        if self.follow_new {
+            format!(
+                "following top {top} by committed (re-selected every interval), {initially} initially"
+            )
+        } else if self.explicit.is_empty() {
+            format!("watching {initially} PID(s) (top {top} by committed)")
+        } else {
+            format!("watching {initially} PID(s)")
+        }
+    }
 }
 
 /// Build the stderr breadcrumb naming PIDs that entered or left the
@@ -564,7 +628,7 @@ fn resolve_watched_pids(rows: &[GpuProcessEntry], explicit: &[u32], top: usize) 
 /// JSONL stream shape or the closing summary.
 ///
 /// `prev_watched` must be captured *before* the caller reassigns its
-/// `watched` variable to the freshly `resolve_watched_pids`-computed
+/// `watched` variable to the freshly [`Selection::select`]-computed
 /// set — the two arguments have to actually differ for the diff to mean
 /// anything. Call order relative to [`process_sample`] does not matter
 /// on its own: `process_sample` only touches a PID present in the
@@ -629,39 +693,24 @@ fn format_followed_set_change(
 /// a timer against [`SpillTracker`] + [`gpu_processes`] until
 /// `--duration` elapses or Ctrl+C, then print the closing summary.
 ///
-/// Returns `2` immediately on a hard error (device unreachable, nothing
-/// to auto-select without `--follow-new`, or `--follow-new` combined
-/// with explicit PIDs); otherwise runs to completion and returns
-/// [`watch_exit_code`] of whether spill was ever observed.
+/// Returns `2` immediately on a hard error (device unreachable, or
+/// nothing to auto-select without `--follow-new`); otherwise runs to
+/// completion and returns [`watch_exit_code`] of whether spill was ever
+/// observed. Invalid argument combinations never reach this function:
+/// [`Selection::new`] rejects them in `main`'s dispatch, before any
+/// backend call.
 pub fn run_watch(
-    pids: &[u32],
+    selection: &Selection,
     interval: Duration,
     duration: Option<Duration>,
-    top: usize,
-    follow_new: bool,
     device: u32,
     json: bool,
 ) -> std::process::ExitCode {
-    let mut seen = std::collections::HashSet::new();
-    let explicit: Vec<u32> = pids.iter().copied().filter(|p| seen.insert(*p)).collect();
-    let auto_selected = explicit.is_empty();
-
-    // Checked first, before any backend call (including `device_info`
-    // below, itself a real NVML/DXGI dispatch) — argument-validation
-    // failures should fail fast without touching hardware at all.
-    if follow_new && !auto_selected {
-        eprintln!(
-            "hmn: watch --follow-new only applies to auto-selection; drop --follow-new or \
-             the explicit PID list"
-        );
-        return std::process::ExitCode::from(2);
-    }
-
     let device_name = device_info(device).ok().and_then(|d| d.name);
 
     // `start` (the origin every later t_ms is measured from) and
     // first_wall_clock are captured together, right before the first
-    // query — not after the resolve_watched_pids/SpillTracker::new/
+    // query — not after the Selection::select/SpillTracker::new/
     // ctrlc::set_handler setup below, which on Windows includes a real
     // DXGI walk plus GPU Adapter Memory PDH enumeration and can take
     // long enough to be visible. Capturing `start` later while
@@ -680,9 +729,11 @@ pub fn run_watch(
         }
     };
 
-    let mut watched = resolve_watched_pids(&first_rows, &explicit, top);
+    let mut state = WatchState::new();
+    let mut watched = selection.select(&first_rows);
     if watched.is_empty() {
-        if follow_new {
+        let top = selection.top;
+        if selection.follow_new {
             eprintln!(
                 "hmn: watch found no GPU processes on device {device} yet (top {top} by \
                  committed); waiting for work to appear"
@@ -714,26 +765,15 @@ pub fn run_watch(
         }
     }
 
-    let mode_clause = if follow_new {
-        format!(
-            "following top {top} by committed (re-selected every interval), {} initially",
-            watched.len()
-        )
-    } else if auto_selected {
-        format!("watching {} PID(s) (top {top} by committed)", watched.len())
-    } else {
-        format!("watching {} PID(s)", watched.len())
-    };
     eprintln!(
-        "hmn watch: device {device}{}, interval {:.1}s, {mode_clause}",
+        "hmn watch: device {device}{}, interval {:.1}s, {}",
         device_name_suffix(device_name.as_deref()),
         interval.as_secs_f64(),
+        selection.describe(watched.len()),
     );
     if !json {
         print!("{}", format_watch_header_text());
     }
-
-    let mut state = WatchState::new();
 
     let rows0 = process_sample(
         &first_rows,
@@ -780,8 +820,8 @@ pub fn run_watch(
             }
         };
 
-        if follow_new {
-            let new_watched = resolve_watched_pids(&rows, &explicit, top);
+        if selection.follow_new {
+            let new_watched = selection.select(&rows);
             if let Some(msg) =
                 format_followed_set_change(&watched, &new_watched, &rows, &state, elapsed)
             {
@@ -1389,29 +1429,73 @@ mod tests {
         assert_eq!(state.seen_order, vec![100, 200]);
     }
 
-    // --- resolve_watched_pids ---
+    // --- Selection ---
 
     #[cfg(feature = "test-helpers")]
     #[test]
-    fn resolve_watched_pids_explicit_passthrough_ignores_rows_and_top() {
+    fn selection_explicit_passthrough_ignores_rows_and_top() {
         let rows = vec![entry(1, Some("a.exe"), 9_000, 0)];
-        assert_eq!(resolve_watched_pids(&rows, &[42, 43], 1), vec![42, 43]);
+        let sel = Selection::new(&[42, 43], 1, false).unwrap();
+        assert_eq!(sel.select(&rows), vec![42, 43]);
+    }
+
+    #[test]
+    fn selection_explicit_pids_are_deduplicated_in_order() {
+        let sel = Selection::new(&[7, 3, 7, 3, 9], 5, false).unwrap();
+        assert_eq!(sel.select(&[]), vec![7, 3, 9]);
     }
 
     #[cfg(feature = "test-helpers")]
     #[test]
-    fn resolve_watched_pids_auto_selects_top_n_from_rows() {
+    fn selection_auto_selects_top_n_from_rows() {
         let rows = vec![
             entry(1, Some("a.exe"), 1_000, 0),
             entry(2, Some("b.exe"), 5_000, 0),
             entry(3, Some("c.exe"), 3_000, 0),
         ];
-        assert_eq!(resolve_watched_pids(&rows, &[], 2), vec![2, 3]);
+        assert_eq!(
+            Selection::new(&[], 2, false).unwrap().select(&rows),
+            vec![2, 3]
+        );
     }
 
     #[test]
-    fn resolve_watched_pids_empty_rows_and_explicit_is_empty() {
-        assert!(resolve_watched_pids(&[], &[], 5).is_empty());
+    fn selection_empty_rows_and_explicit_is_empty() {
+        assert!(
+            Selection::new(&[], 5, false)
+                .unwrap()
+                .select(&[])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn selection_rejects_follow_new_with_explicit_pids() {
+        let err = Selection::new(&[42], 5, true).err().unwrap();
+        // Byte-identical to the pre-v0.2.12 message (`main` adds `hmn: `).
+        assert_eq!(
+            err,
+            "watch --follow-new only applies to auto-selection; drop --follow-new or the \
+             explicit PID list"
+        );
+    }
+
+    #[test]
+    fn selection_describe_matches_the_pre_selection_header_strings() {
+        // The three header clauses `run_watch` printed before `Selection`
+        // existed, byte for byte.
+        assert_eq!(
+            Selection::new(&[], 3, true).unwrap().describe(1),
+            "following top 3 by committed (re-selected every interval), 1 initially"
+        );
+        assert_eq!(
+            Selection::new(&[], 5, false).unwrap().describe(4),
+            "watching 4 PID(s) (top 5 by committed)"
+        );
+        assert_eq!(
+            Selection::new(&[10, 11], 5, false).unwrap().describe(2),
+            "watching 2 PID(s)"
+        );
     }
 
     // --- format_followed_set_change (--follow-new stderr breadcrumb) ---

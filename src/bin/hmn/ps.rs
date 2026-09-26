@@ -70,6 +70,15 @@ pub enum SortKey {
     Total,
 }
 
+/// A process's total GPU-memory footprint: committed plus shared-resident
+/// bytes. The one definition behind `hmn ps --sort total`, `hmn ps --min`
+/// and `hmn watch --min`, so the three cannot disagree about what "total"
+/// means. Saturating, so a corrupt counter pair cannot wrap around.
+#[must_use]
+pub const fn footprint_bytes(used_bytes: u64, shared_used_bytes: u64) -> u64 {
+    used_bytes.saturating_add(shared_used_bytes)
+}
+
 /// Build the row comparator for a given [`SortKey`], shared by `hmn ps`
 /// (user-selectable via `--sort`) and `watch::select_top_n_pids` (always
 /// [`SortKey::Dedicated`]) so the two orderings cannot silently drift
@@ -81,10 +90,8 @@ pub const fn ps_row_comparator(key: SortKey) -> impl Fn(&PsRow, &PsRow) -> std::
         let primary = match key {
             SortKey::Dedicated => b.used_bytes.cmp(&a.used_bytes),
             SortKey::Shared => b.shared_used_bytes.cmp(&a.shared_used_bytes),
-            SortKey::Total => b
-                .used_bytes
-                .saturating_add(b.shared_used_bytes)
-                .cmp(&a.used_bytes.saturating_add(a.shared_used_bytes)),
+            SortKey::Total => footprint_bytes(b.used_bytes, b.shared_used_bytes)
+                .cmp(&footprint_bytes(a.used_bytes, a.shared_used_bytes)),
         };
         primary
             .then_with(|| a.name.cmp(&b.name))
@@ -156,7 +163,7 @@ pub fn run_ps(
                 continue;
             }
             if let Some(min) = min_filter
-                && entry.used_bytes.saturating_add(entry.shared_used_bytes) < min
+                && footprint_bytes(entry.used_bytes, entry.shared_used_bytes) < min
             {
                 continue;
             }
