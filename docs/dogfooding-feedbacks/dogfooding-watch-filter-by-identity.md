@@ -4,7 +4,7 @@
 **Reporter:** candle-mi Figure-13 patching campaign (`examples/figure13_newline_patch`, gemma-2-2b and Llama-3.2-1B, RTX 5060 Ti 16 GiB, Windows 11 / WDDM; `probe`/`validate` captured 2026-09-14 on `hmn` ≤ `0.2.10`, `grid`/`midline` captured 2026-09-15 on `0.2.11` — the two later files carry the `wall_clock` field v0.2.11 added, the two earlier ones do not; `hmn` on PATH today is `0.2.11`)
 **Severity:** Field validation of v0.2.7 `--follow-new` (it worked exactly as specified) + one request for **v0.2.12**: select by process identity, not only by VRAM rank
 **Affected area:** `hmn watch` auto-selection criterion. `--follow-new` re-runs the top-N choice every interval; the *criterion* is still committed-VRAM descending, which cannot express "the process I am measuring"
-**Status:** Proposed, v0.2.12 candidate
+**Status:** ✅ **Resolved in v0.2.12** (2026-09-26). All three requests shipped as asked — `watch --filter` (case-insensitive substring, repeatable, composing with `--follow-new`), `watch --min` with `ps --min`'s footprint, the active criterion on the header line — and smaller observation 1 as a `{"kind":"start",...}` record, always the first line of `--json` (the release's one deliberate wire-format addition). Observation 2's churn is what `--filter` removes. Reviewing the work also found Linux names cut to 15 bytes, which would have kept this report's own `--filter figure13_newline_patch` from matching there; fixed in the same release.
 
 ---
 

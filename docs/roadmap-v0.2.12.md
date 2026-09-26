@@ -2,10 +2,10 @@
 
 > *Clean the base first, then teach `hmn watch` to follow a process by name.*
 
-**Status: in progress.** Part 1 (audit remediation) ✅ done 2026-09-26 — nine items in ten commits,
-then a `PDH` error-wording follow-up and a consistency pass; pushed at `ed2c2aa`, CI green. Part 2
-(dogfooding features) ✅ implemented 2026-09-26, not yet pushed or released — see *At release*,
-below.
+**Status: ✅ shipped 2026-09-26.** Part 1 (audit remediation) — nine items in ten commits, then a
+`PDH` error-wording follow-up and a consistency pass — was pushed first, at `ed2c2aa`, CI green.
+Part 2 (dogfooding features), its consistency pass and the Linux name fix it surfaced shipped with
+the release.
 
 ---
 
@@ -269,12 +269,15 @@ byte-identical.
 
 ### At release
 
-- Bump `Cargo.toml` to `0.2.12`; flip this roadmap's status and the dogfooding report's `Status`
-  line (`✅ Resolved in v0.2.12`), per the dogfooding style guide.
-- ~~Rotate the README's "what's new" banner~~ — done ahead of release: 🆕 `0.2.12`, `0.2.11` to
-  🚀, `0.2.9` dropped.
-- Refresh the `start`-record sample in the watch tutorial's Step 5, captured from a pre-release
-  build and so reading `"hmn_version":"0.2.11"`.
+- `Cargo.toml` bumped to `0.2.12`; this roadmap's status and the dogfooding report's `Status`
+  flipped, per the dogfooding style guide.
+- The README's "what's new" banner rotated ahead of release: 🆕 `0.2.12`, `0.2.11` to 🚀, `0.2.9`
+  dropped.
+- The `start`-record sample in the watch tutorial's Step 5 re-captured from the `0.2.12` build.
+- Two older reports turned out never to have been flipped although their requests shipped —
+  `dogfooding-spill-triage-watch-mode.md` (v0.2.6) and
+  `dogfooding-orphan-attribution-and-ps-spill-flag.md` (v0.2.11), exactly the staleness the style
+  guide warns about. Both now read `Resolved`.
 
 ---
 

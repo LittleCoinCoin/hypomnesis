@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Part 1 of v0.2.12 remediates the nine items of the
+## [0.2.12] - 2026-09-26
+
+Two parts. Part 1 remediates the nine items of the
 [2026-09-26 duplicate-code audit](docs/audits/2026-09-26-duplicate-code-audit.md), one commit
-each, before part 2 implements a candle-mi dogfooding report's identity-based `hmn watch`
-selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
+each. Part 2 answers a candle-mi dogfooding report
+([2026-09-21](docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md)) whose
+`hmn watch --follow-new --top 3` captures were 73.9% desktop rows: `hmn watch` now selects by name
+(`--filter`) and size (`--min`), says which criterion is active, and opens every `--json` capture
+with a `start` record — the release's one deliberate wire-format addition. On Linux, process names
+are no longer cut to 15 bytes. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
 
 ### Added
 
@@ -688,7 +694,8 @@ function bodies are placeholders that compile and pass clippy under
 - **`README.md`** — project overview with badges (CI, crates.io, docs.rs, MSRV, license, unsafe-deny, NVIDIA NVML+DXGI), install, usage, capability matrix, feature flags, license, and development conventions. Mirrors the structure used in [`anamnesis/README.md`](https://github.com/PCfVW/anamnesis/blob/main/README.md).
 - **`[package.metadata.docs.rs]`** — docs.rs builds with `all-features = true` and targets both `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, exposing the Windows-only `dxgi` module on docs.rs alongside the cross-platform `nvml` path.
 
-[Unreleased]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.11...HEAD
+[Unreleased]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.8...v0.2.9

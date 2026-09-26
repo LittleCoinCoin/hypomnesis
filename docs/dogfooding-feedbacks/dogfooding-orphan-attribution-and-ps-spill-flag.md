@@ -4,7 +4,7 @@
 **Reporter:** candle-mi Figure-13 poetry-planning experiments (composition-horizon power run + newline activation patching, RTX 5060 Ti 16 GiB, Windows 11 / WDDM, `hmn 0.2.9`)
 **Severity:** Field validation of v0.2.7 `watch --follow-new` (36-process run, clean) + four small requests for **v0.2.11**
 **Affected area:** `hmn ps` row semantics (no spill flag, no liveness, no size filter); `hmn watch --json` sample schema (no wall-clock stamp)
-**Status:** Proposed — v0.2.11 candidates
+**Status:** ✅ **Resolved in v0.2.11** (2026-09-15). All four requests shipped: the SPILL column / `spilling` field on `hmn ps`, `wall_clock` on `hmn watch --json` samples, `hmn ps --min`, and `hmn fits`. Smaller observations 3 (a liveness column) and 4 (tenancy in triage) were recorded, not taken up. *(Status flipped 2026-09-26, found stale during v0.2.12's release.)*
 
 ---
 

@@ -295,10 +295,10 @@ information — and more, because a JSON file is often kept while the stderr
 stream is thrown away:
 
 ```json
-{"kind":"start","t_ms":0,"wall_clock":"2026-09-26T11:49:11.504Z","hmn_version":"0.2.11","argv":["hmn.exe","watch","--follow-new","--top","3","--filter","spillforge","--interval","3s","--duration","1s","--json"],"device":0,"device_name":"NVIDIA GeForce RTX 5060 Ti","interval_ms":3000,"duration_ms":1000,"selection":{"mode":"follow_new","pids":[],"top":3,"filters":["spillforge"],"min_bytes":null}}
+{"kind":"start","t_ms":0,"wall_clock":"2026-09-26T12:34:13.184Z","hmn_version":"0.2.12","argv":["hmn.exe","watch","--follow-new","--top","3","--filter","spillforge","--interval","3s","--duration","1s","--json"],"device":0,"device_name":"NVIDIA GeForce RTX 5060 Ti","interval_ms":3000,"duration_ms":1000,"selection":{"mode":"follow_new","pids":[],"top":3,"filters":["spillforge"],"min_bytes":null}}
 ```
 
-*(Real output from a pre-release build, hence `0.2.11`.)* It also makes a cut
+*(Real output, reference RTX 5060 Ti.)* It also makes a cut
 capture detectable from the file alone: a `start` record with no closing
 `summary` means the watch was killed before it finished, or the file was
 copied mid-run. `argv` records the program by file name only, never its full

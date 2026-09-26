@@ -4,7 +4,7 @@
 **Reporter:** rhyme-mdlm (askesis, PyTorch overnight training on RTX 5060 Ti, 16 GiB, Windows 11 / WDDM)
 **Severity:** Field validation of v0.2.5 + feature request for **v0.2.6** (`hmn watch`)
 **Affected area:** `hmn ps` SHARED reporting (shipped v0.2.5); the absent attach-to-running-PID mode
-**Status:** Proposed — v0.2.6 candidate
+**Status:** ✅ **Resolved in v0.2.6** (2026-07-25). `hmn watch [PID...]` shipped as the requested attach-to-running-PID mode — a `time(1)`-style sampler rather than a TUI. *(Status flipped 2026-09-26, found stale during v0.2.12's release.)*
 
 ---
 
