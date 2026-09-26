@@ -182,7 +182,7 @@ detectable from the file alone.
 | # | Item | Kind | Status |
 |---|---|---|---|
 | 1 | `Selection` type; `footprint_bytes` shared by `ps --min`, `ps --sort total` and `watch --min` | refactor | ✅ |
-| 2 | `hmn watch --filter <PATTERN>` + criterion on the header (requests 1 and 3) | feature | ⏳ |
+| 2 | `hmn watch --filter <PATTERN>` + criterion on the header (requests 1 and 3) | feature | ✅ |
 | 3 | `hmn watch --min <SIZE>` + criterion on the header (requests 2 and 3) | feature | ⏳ |
 | 4 | `{"kind":"start", ...}` first record of `--json` (observation 1) | feature | ⏳ |
 | 5 | README, FAQ, tutorial, roadmap close-out | docs | ⏳ |

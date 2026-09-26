@@ -4,7 +4,7 @@
 //! `VRAM`) and sample per-PID usage plus adapter spill state on a timer —
 //! a scrolling `time(1)`-style sampler, not a TUI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -540,6 +540,19 @@ pub struct Selection {
     /// Whether auto-selection re-runs every interval (`--follow-new`)
     /// rather than once at attach.
     follow_new: bool,
+    /// `--filter` patterns, as typed. Empty means no name filter; a name
+    /// qualifies when it contains any one of them, ignoring case.
+    filters: Vec<String>,
+}
+
+/// The outcome of one [`Selection::select`] call.
+struct Selected {
+    /// The PIDs to watch, in selection order.
+    pids: Vec<u32>,
+    /// PIDs `--filter` could not judge: no resolvable name in this sample
+    /// and none remembered from an earlier one. Always empty without
+    /// `--filter`.
+    unmatchable: Vec<u32>,
 }
 
 impl Selection {
@@ -548,45 +561,87 @@ impl Selection {
     /// # Errors
     ///
     /// Returns the user-facing message (without the `hmn: ` prefix) when
-    /// `--follow-new` is combined with explicit PIDs: there is no top-N to
-    /// re-run against a fixed list.
-    pub fn new(pids: &[u32], top: usize, follow_new: bool) -> Result<Self, String> {
-        let mut seen = std::collections::HashSet::new();
+    /// `--follow-new` or `--filter` is combined with explicit PIDs: both
+    /// narrow auto-selection, and there is no top-N to narrow for a fixed
+    /// list.
+    pub fn new(
+        pids: &[u32],
+        top: usize,
+        follow_new: bool,
+        filters: &[String],
+    ) -> Result<Self, String> {
+        let mut seen = HashSet::new();
         let explicit: Vec<u32> = pids.iter().copied().filter(|p| seen.insert(*p)).collect();
-        if follow_new && !explicit.is_empty() {
-            return Err(
-                "watch --follow-new only applies to auto-selection; drop --follow-new or \
-                 the explicit PID list"
-                    .to_owned(),
-            );
+        if !explicit.is_empty() {
+            if follow_new {
+                return Err(
+                    "watch --follow-new only applies to auto-selection; drop --follow-new \
+                     or the explicit PID list"
+                        .to_owned(),
+                );
+            }
+            if !filters.is_empty() {
+                return Err(
+                    "watch --filter only applies to auto-selection; drop --filter or the \
+                     explicit PID list"
+                        .to_owned(),
+                );
+            }
         }
         Ok(Self {
             explicit,
             top,
             follow_new,
+            filters: filters.to_vec(),
         })
     }
 
     /// Resolve which PIDs to watch from one sample: the explicit PIDs
-    /// unchanged in explicit mode (always watched exactly as given),
-    /// otherwise the top `top` by committed VRAM from `rows` — sharing
+    /// unchanged in explicit mode (always watched exactly as given);
+    /// otherwise the processes passing `--filter` (all of them without
+    /// it), then the top `top` of those by committed VRAM — sharing
     /// `hmn ps`'s own comparator via [`select_top_n_pids`], so the two
     /// orderings cannot drift apart.
+    ///
+    /// Under `--filter`, a row is judged by [`matchable_name`]: its
+    /// current resolved name, else the name `state` last resolved for that
+    /// PID. A row with neither is reported in [`Selected::unmatchable`]
+    /// instead of being dropped silently.
     ///
     /// Called once before the watch loop always, and again every interval
     /// under `--follow-new` (cheap: `rows` numbers in the tens, and
     /// `--interval` is 5s+ apart by default).
     #[must_use]
-    fn select(&self, rows: &[GpuProcessEntry]) -> Vec<u32> {
+    fn select(&self, rows: &[GpuProcessEntry], state: &WatchState) -> Selected {
         if !self.explicit.is_empty() {
-            return self.explicit.clone();
+            return Selected {
+                pids: self.explicit.clone(),
+                unmatchable: Vec::new(),
+            };
         }
+        let mut unmatchable = Vec::new();
         // device_index / device_name / spilling are unused by
         // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
         // defaulted rather than threaded through from the caller, which has
         // no device-name or live-spill context of its own to give.
         let ps_rows: Vec<PsRow> = rows
             .iter()
+            .filter(|e| {
+                if self.filters.is_empty() {
+                    return true;
+                }
+                let sticky = state
+                    .by_pid
+                    .get(&e.pid)
+                    .and_then(|s| s.last_name.as_deref());
+                matchable_name(e.name.as_deref(), sticky).map_or_else(
+                    || {
+                        unmatchable.push(e.pid);
+                        false
+                    },
+                    |name| matches_any(name, &self.filters),
+                )
+            })
             .map(|e| PsRow {
                 pid: e.pid,
                 // BORROW: clone — e is borrowed from `rows`.
@@ -598,25 +653,102 @@ impl Selection {
                 spilling: None,
             })
             .collect();
-        select_top_n_pids(&ps_rows, self.top)
+        Selected {
+            pids: select_top_n_pids(&ps_rows, self.top),
+            unmatchable,
+        }
     }
 
     /// The stderr header's mode clause, given how many PIDs were
-    /// selected at attach — e.g. `following top 3 by committed
-    /// (re-selected every interval), 1 initially`.
+    /// selected at attach — e.g. `following top 3 by committed among
+    /// names containing "train" (case-insensitive) (re-selected every
+    /// interval), 1 initially`. Without `--filter`, byte-identical to the
+    /// clauses `hmn watch` printed before it existed.
     #[must_use]
     fn describe(&self, initially: usize) -> String {
         let top = self.top;
+        let criterion = self.criterion();
         if self.follow_new {
             format!(
-                "following top {top} by committed (re-selected every interval), {initially} initially"
+                "following top {top} by committed{criterion} (re-selected every interval), \
+                 {initially} initially"
             )
         } else if self.explicit.is_empty() {
-            format!("watching {initially} PID(s) (top {top} by committed)")
+            format!("watching {initially} PID(s) (top {top} by committed{criterion})")
         } else {
             format!("watching {initially} PID(s)")
         }
     }
+
+    /// The auto-selection criterion beyond "top N by committed", as a
+    /// clause to splice after it (leading space included), or the empty
+    /// string when there is none — e.g. ` among names containing "a" or
+    /// "b" (case-insensitive)`. Patterns are `Debug`-quoted, so one
+    /// containing a quote or a space reads unambiguously.
+    #[must_use]
+    fn criterion(&self) -> String {
+        if self.filters.is_empty() {
+            return String::new();
+        }
+        let patterns: Vec<String> = self.filters.iter().map(|f| format!("{f:?}")).collect();
+        format!(
+            " among names containing {} (case-insensitive)",
+            patterns.join(" or ")
+        )
+    }
+}
+
+/// The name `--filter` judges a row by: its current name if that is a
+/// genuinely resolved one, else `sticky` — the name this PID last resolved
+/// to in an earlier sample, so a followed process whose name flickers to
+/// `[protected]` for one interval is not evicted by it. `None` when
+/// neither is available. Besides what [`resolved_name`] already excludes,
+/// the `nvidia-smi` fallback's literal `?` is not a name either.
+#[must_use]
+fn matchable_name<'a>(current: Option<&'a str>, sticky: Option<&'a str>) -> Option<&'a str> {
+    let real = |n: &&str| *n != "?";
+    resolved_name(current)
+        .filter(real)
+        .or_else(|| resolved_name(sticky).filter(real))
+}
+
+/// Whether `name` contains any of `patterns`, ignoring case (`--filter`'s
+/// matching rule).
+#[must_use]
+fn matches_any(name: &str, patterns: &[String]) -> bool {
+    let name = name.to_lowercase();
+    patterns.iter().any(|p| name.contains(&p.to_lowercase()))
+}
+
+/// The one-shot stderr notices for PIDs in `unmatchable` that this watch
+/// has not announced yet, recording them in `announced` — so a process
+/// `--filter` cannot judge is named exactly once rather than every
+/// interval, and never passes silently.
+#[must_use]
+fn unmatchable_notices(unmatchable: &[u32], announced: &mut HashSet<u32>) -> Vec<String> {
+    unmatchable
+        .iter()
+        .filter(|pid| announced.insert(**pid))
+        .map(|pid| format!("hmn watch: pid={pid} has no resolvable name; --filter cannot match it"))
+        .collect()
+}
+
+/// Parse one `--filter` pattern: any non-blank string, kept as typed. A
+/// blank pattern would match every name — almost certainly a scripting
+/// mistake (an unset variable), so it is rejected rather than accepted as
+/// a silent no-op.
+///
+/// # Errors
+///
+/// Returns an error message when `s` is empty or whitespace only.
+pub fn parse_filter_pattern(s: &str) -> std::result::Result<String, String> {
+    if s.trim().is_empty() {
+        return Err(format!(
+            "invalid filter {s:?}: expected a non-blank name pattern"
+        ));
+    }
+    // BORROW: explicit to_owned — clap stores the parsed value.
+    Ok(s.to_owned())
 }
 
 /// Build the stderr breadcrumb naming PIDs that entered or left the
@@ -730,18 +862,22 @@ pub fn run_watch(
     };
 
     let mut state = WatchState::new();
-    let mut watched = selection.select(&first_rows);
+    // PIDs already named as unmatchable by `--filter`, so each is announced once.
+    let mut announced = HashSet::new();
+    let first = selection.select(&first_rows, &state);
+    let mut watched = first.pids;
     if watched.is_empty() {
         let top = selection.top;
+        let criterion = selection.criterion();
         if selection.follow_new {
             eprintln!(
                 "hmn: watch found no GPU processes on device {device} yet (top {top} by \
-                 committed); waiting for work to appear"
+                 committed{criterion}); waiting for work to appear"
             );
         } else {
             eprintln!(
                 "hmn: watch found no GPU processes on device {device} to auto-select \
-                 (top {top}); re-run with an explicit PID once a workload is running"
+                 (top {top}{criterion}); re-run with an explicit PID once a workload is running"
             );
             return std::process::ExitCode::from(2);
         }
@@ -773,6 +909,9 @@ pub fn run_watch(
     );
     if !json {
         print!("{}", format_watch_header_text());
+    }
+    for notice in unmatchable_notices(&first.unmatchable, &mut announced) {
+        eprintln!("{notice}");
     }
 
     let rows0 = process_sample(
@@ -821,13 +960,16 @@ pub fn run_watch(
         };
 
         if selection.follow_new {
-            let new_watched = selection.select(&rows);
+            let next = selection.select(&rows, &state);
+            for notice in unmatchable_notices(&next.unmatchable, &mut announced) {
+                eprintln!("{notice}");
+            }
             if let Some(msg) =
-                format_followed_set_change(&watched, &new_watched, &rows, &state, elapsed)
+                format_followed_set_change(&watched, &next.pids, &rows, &state, elapsed)
             {
                 eprintln!("{msg}");
             }
-            watched = new_watched;
+            watched = next.pids;
         }
 
         let sample = process_sample(&rows, &mut state, &watched, elapsed, tracker.as_mut());
@@ -1431,18 +1573,24 @@ mod tests {
 
     // --- Selection ---
 
+    /// An auto-selection `Selection` with the given `--filter` patterns.
+    fn auto(top: usize, follow_new: bool, filters: &[&str]) -> Selection {
+        let filters: Vec<String> = filters.iter().map(|f| (*f).to_owned()).collect();
+        Selection::new(&[], top, follow_new, &filters).unwrap()
+    }
+
     #[cfg(feature = "test-helpers")]
     #[test]
     fn selection_explicit_passthrough_ignores_rows_and_top() {
         let rows = vec![entry(1, Some("a.exe"), 9_000, 0)];
-        let sel = Selection::new(&[42, 43], 1, false).unwrap();
-        assert_eq!(sel.select(&rows), vec![42, 43]);
+        let sel = Selection::new(&[42, 43], 1, false, &[]).unwrap();
+        assert_eq!(sel.select(&rows, &WatchState::new()).pids, vec![42, 43]);
     }
 
     #[test]
     fn selection_explicit_pids_are_deduplicated_in_order() {
-        let sel = Selection::new(&[7, 3, 7, 3, 9], 5, false).unwrap();
-        assert_eq!(sel.select(&[]), vec![7, 3, 9]);
+        let sel = Selection::new(&[7, 3, 7, 3, 9], 5, false, &[]).unwrap();
+        assert_eq!(sel.select(&[], &WatchState::new()).pids, vec![7, 3, 9]);
     }
 
     #[cfg(feature = "test-helpers")]
@@ -1454,24 +1602,21 @@ mod tests {
             entry(3, Some("c.exe"), 3_000, 0),
         ];
         assert_eq!(
-            Selection::new(&[], 2, false).unwrap().select(&rows),
+            auto(2, false, &[]).select(&rows, &WatchState::new()).pids,
             vec![2, 3]
         );
     }
 
     #[test]
     fn selection_empty_rows_and_explicit_is_empty() {
-        assert!(
-            Selection::new(&[], 5, false)
-                .unwrap()
-                .select(&[])
-                .is_empty()
-        );
+        let selected = auto(5, false, &[]).select(&[], &WatchState::new());
+        assert!(selected.pids.is_empty());
+        assert!(selected.unmatchable.is_empty());
     }
 
     #[test]
     fn selection_rejects_follow_new_with_explicit_pids() {
-        let err = Selection::new(&[42], 5, true).err().unwrap();
+        let err = Selection::new(&[42], 5, true, &[]).err().unwrap();
         // Byte-identical to the pre-v0.2.12 message (`main` adds `hmn: `).
         assert_eq!(
             err,
@@ -1481,21 +1626,179 @@ mod tests {
     }
 
     #[test]
-    fn selection_describe_matches_the_pre_selection_header_strings() {
-        // The three header clauses `run_watch` printed before `Selection`
-        // existed, byte for byte.
+    fn selection_rejects_filter_with_explicit_pids() {
+        let err = Selection::new(&[42], 5, false, &["train".to_owned()])
+            .err()
+            .unwrap();
         assert_eq!(
-            Selection::new(&[], 3, true).unwrap().describe(1),
+            err,
+            "watch --filter only applies to auto-selection; drop --filter or the explicit PID \
+             list"
+        );
+    }
+
+    #[test]
+    fn selection_describe_matches_the_pre_selection_header_strings() {
+        // Without `--filter`, the three header clauses `run_watch` printed
+        // before `Selection` existed, byte for byte.
+        assert_eq!(
+            auto(3, true, &[]).describe(1),
             "following top 3 by committed (re-selected every interval), 1 initially"
         );
         assert_eq!(
-            Selection::new(&[], 5, false).unwrap().describe(4),
+            auto(5, false, &[]).describe(4),
             "watching 4 PID(s) (top 5 by committed)"
         );
         assert_eq!(
-            Selection::new(&[10, 11], 5, false).unwrap().describe(2),
+            Selection::new(&[10, 11], 5, false, &[])
+                .unwrap()
+                .describe(2),
             "watching 2 PID(s)"
         );
+    }
+
+    #[test]
+    fn selection_describe_announces_the_filter() {
+        assert_eq!(
+            auto(3, true, &["figure13"]).describe(1),
+            "following top 3 by committed among names containing \"figure13\" \
+             (case-insensitive) (re-selected every interval), 1 initially"
+        );
+        assert_eq!(
+            auto(5, false, &["train", "eval run"]).describe(2),
+            "watching 2 PID(s) (top 5 by committed among names containing \"train\" or \
+             \"eval run\" (case-insensitive))"
+        );
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_filter_narrows_before_top_n() {
+        // `dwm.exe` holds the most VRAM, so rank alone would pick it; the
+        // filter admits only the two `train*` processes, then top-1 picks
+        // the larger of them.
+        let rows = vec![
+            entry(1, Some("dwm.exe"), 9_000, 0),
+            entry(2, Some("train.exe"), 3_000, 0),
+            entry(3, Some("Train_Eval.EXE"), 5_000, 0),
+        ];
+        let state = WatchState::new();
+        assert_eq!(
+            auto(1, true, &["TRAIN"]).select(&rows, &state).pids,
+            vec![3]
+        );
+        assert_eq!(
+            auto(5, true, &["train"]).select(&rows, &state).pids,
+            vec![3, 2]
+        );
+        assert!(
+            auto(5, true, &["nope"])
+                .select(&rows, &state)
+                .pids
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_filter_patterns_are_or_ed() {
+        let rows = vec![
+            entry(1, Some("python.exe"), 1_000, 0),
+            entry(2, Some("train.exe"), 2_000, 0),
+            entry(3, Some("dwm.exe"), 3_000, 0),
+        ];
+        let got = auto(5, true, &["python", "train"]).select(&rows, &WatchState::new());
+        assert_eq!(got.pids, vec![2, 1]);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_filter_keeps_a_followed_pid_through_a_name_flicker() {
+        // pid 9 was followed as `train.exe`; this sample its name reads
+        // `[protected]`. The sticky last-resolved name keeps it matching.
+        let mut state = WatchState::new();
+        state.track(9, 0, 0).last_name = Some("train.exe".to_owned());
+        let rows = vec![entry(9, Some("[protected]"), 4_000, 0)];
+        let got = auto(3, true, &["train"]).select(&rows, &state);
+        assert_eq!(got.pids, vec![9]);
+        assert!(got.unmatchable.is_empty());
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_filter_reports_never_resolved_rows_as_unmatchable() {
+        let rows = vec![
+            entry(1, Some("[protected]"), 1_000, 0),
+            entry(2, Some("[exited]"), 1_000, 0),
+            entry(3, Some("?"), 1_000, 0),
+            entry(4, None, 1_000, 0),
+            entry(5, Some("train.exe"), 1_000, 0),
+            entry(6, Some("dwm.exe"), 1_000, 0),
+        ];
+        let got = auto(9, true, &["train"]).select(&rows, &WatchState::new());
+        assert_eq!(got.pids, vec![5]);
+        // Only the rows the filter could not judge — `dwm.exe` was judged,
+        // and rejected.
+        assert_eq!(got.unmatchable, vec![1, 2, 3, 4]);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn selection_without_filter_reports_nothing_unmatchable() {
+        let rows = vec![entry(1, Some("[protected]"), 1_000, 0)];
+        let got = auto(3, true, &[]).select(&rows, &WatchState::new());
+        assert_eq!(got.pids, vec![1]);
+        assert!(got.unmatchable.is_empty());
+    }
+
+    #[test]
+    fn matchable_name_prefers_current_then_sticky() {
+        assert_eq!(matchable_name(Some("a.exe"), Some("b.exe")), Some("a.exe"));
+        assert_eq!(
+            matchable_name(Some("[protected]"), Some("b.exe")),
+            Some("b.exe")
+        );
+        assert_eq!(
+            matchable_name(Some("[exited]"), Some("b.exe")),
+            Some("b.exe")
+        );
+        assert_eq!(matchable_name(Some("?"), Some("b.exe")), Some("b.exe"));
+        assert_eq!(matchable_name(None, Some("b.exe")), Some("b.exe"));
+        assert_eq!(matchable_name(Some("?"), Some("?")), None);
+        assert_eq!(matchable_name(None, None), None);
+        // `[kernel]` is a stable, genuine name (PID 4), as for PID reuse.
+        assert_eq!(matchable_name(Some("[kernel]"), None), Some("[kernel]"));
+    }
+
+    #[test]
+    fn matches_any_is_a_case_insensitive_substring_or() {
+        let pats = ["Figure13".to_owned(), "python".to_owned()];
+        assert!(matches_any("figure13_newline_patch.exe", &pats));
+        assert!(matches_any("PYTHON.EXE", &pats));
+        assert!(!matches_any("dwm.exe", &pats));
+    }
+
+    #[test]
+    fn unmatchable_notices_announce_each_pid_once() {
+        let mut announced = HashSet::new();
+        assert_eq!(
+            unmatchable_notices(&[7, 8], &mut announced),
+            [
+                "hmn watch: pid=7 has no resolvable name; --filter cannot match it",
+                "hmn watch: pid=8 has no resolvable name; --filter cannot match it",
+            ]
+        );
+        assert_eq!(
+            unmatchable_notices(&[8, 9], &mut announced),
+            ["hmn watch: pid=9 has no resolvable name; --filter cannot match it"]
+        );
+    }
+
+    #[test]
+    fn parse_filter_pattern_rejects_blank() {
+        assert_eq!(parse_filter_pattern("train").unwrap(), "train");
+        assert!(parse_filter_pattern("").is_err());
+        assert!(parse_filter_pattern("   ").is_err());
     }
 
     // --- format_followed_set_change (--follow-new stderr breadcrumb) ---

@@ -14,6 +14,22 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
 
 ### Added
 
+- **`hmn watch --filter <PATTERN>` — follow a program by name, not by VRAM rank**
+  (`src/bin/hmn/watch.rs`, `main.rs`) — auto-selection (one-shot, or re-run every interval under
+  `--follow-new`) now considers only processes whose name contains the pattern, ignoring case,
+  then keeps the top `--top` of those. Repeatable: a name matching any pattern qualifies.
+  `hmn watch --follow-new --filter figure13_newline_patch --json` records only the workload,
+  where `--top 3` alone recorded 73.9% desktop rows in candle-mi's Figure-13 captures. The active
+  patterns appear on the stderr header line (`following top 3 by committed among names containing
+  "figure13" (case-insensitive) …`), so a committed capture says how it was selected; without
+  `--filter` the header is unchanged. Name resolution is guarded both ways: a followed process
+  whose name briefly reads `[protected]` or `[exited]` keeps matching on the last name it resolved
+  to, and a process whose name never resolves is announced once on stderr (`pid=N has no
+  resolvable name; --filter cannot match it`) instead of being dropped silently. Combined with
+  explicit PIDs it is a hard error (exit `2`), like `--follow-new`; a blank pattern is rejected.
+  From candle-mi's
+  [2026-09-21 dogfooding report](docs/dogfooding-feedbacks/dogfooding-watch-filter-by-identity.md),
+  requests 1 and 3.
 - **Tests — `SpillReport` JSON key parity across every emitter** (`src/bin/hmn.rs`) — the
   adapter-level `SpillReport` object is spelled out by four independent emitters (`hmn spill
   --json` measurable and no-tracker, `hmn watch --json` summary measurable and no-tracker), and

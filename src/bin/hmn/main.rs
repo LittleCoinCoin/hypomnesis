@@ -57,7 +57,7 @@ use crate::format::{parse_duration, parse_size_bytes};
 use crate::ps::{SortKey, run_ps};
 use crate::spill::run_spill;
 use crate::summary::run_summary;
-use crate::watch::{Selection, run_watch};
+use crate::watch::{Selection, parse_filter_pattern, run_watch};
 
 mod fits;
 mod format;
@@ -275,7 +275,8 @@ enum Commands {
     ///
     /// With no PID given, auto-selects the top `--top` processes by
     /// committed VRAM from the first sample and keeps that fixed set for
-    /// the run (or re-selects every interval with `--follow-new`). A
+    /// the run (or re-selects every interval with `--follow-new`);
+    /// `--filter` narrows that choice to processes by name. A
     /// watched PID that stops appearing in the per-process listing
     /// (exited, or simply holds no GPU memory right now) renders as 0
     /// bytes each interval — `hmn watch` does not distinguish the two;
@@ -289,7 +290,7 @@ enum Commands {
     /// summary (adapter-level `SpillReport` plus per-PID peak/baseline) and
     /// exiting `0` if spill was never observed, `1` if it was at least
     /// once, `2` on a hard error (bad device, nothing to auto-select, or
-    /// `--follow-new` combined with explicit PID(s)).
+    /// `--follow-new` / `--filter` combined with explicit PID(s)).
     Watch {
         /// Explicit PID(s) to watch. When omitted, auto-selects the top
         /// `--top` processes by committed VRAM from the first sample.
@@ -323,6 +324,20 @@ enum Commands {
         /// list, and explicit PIDs are watched exactly as given.
         #[arg(long)]
         follow_new: bool,
+        /// Auto-select mode only: consider only processes whose name
+        /// contains PATTERN, ignoring case (`--filter train` matches
+        /// `train.exe` and `Train_Eval.EXE`), then keep the top `--top`
+        /// of those. Repeatable: a name matching any one pattern
+        /// qualifies. Composes with `--follow-new`, which re-applies it
+        /// every interval. A followed process whose name briefly fails to
+        /// resolve (`[protected]`, `[exited]`) keeps matching on the last
+        /// name it resolved to; a process whose name never resolves
+        /// cannot match, and is announced once on stderr rather than
+        /// dropped silently. The active patterns appear on the stderr
+        /// header line. Combining this with explicit PID(s) is a hard
+        /// error (exit `2`).
+        #[arg(long = "filter", value_name = "PATTERN", value_parser = parse_filter_pattern)]
+        filters: Vec<String>,
         /// GPU index to watch (NVML-canonical ordering).
         #[arg(long, value_name = "INDEX", default_value_t = 0)]
         device: u32,
@@ -405,12 +420,13 @@ fn main() -> std::process::ExitCode {
             duration,
             top,
             follow_new,
+            filters,
             device,
             json,
         }) => {
             // Validated before any backend call: an invalid argument
             // combination fails fast without touching hardware at all.
-            return match Selection::new(&pids, top, follow_new) {
+            return match Selection::new(&pids, top, follow_new, &filters) {
                 Ok(selection) => run_watch(&selection, interval, duration, device, json),
                 Err(msg) => {
                     eprintln!("hmn: {msg}");
@@ -615,6 +631,7 @@ mod tests {
             duration,
             top,
             follow_new,
+            filters,
             device,
             json,
         }) = cli.command
@@ -622,6 +639,7 @@ mod tests {
             panic!("expected Watch subcommand");
         };
         assert!(pids.is_empty());
+        assert!(filters.is_empty());
         assert_eq!(interval, Duration::from_secs(5));
         assert_eq!(duration, None);
         assert_eq!(top, 5);
@@ -686,6 +704,42 @@ mod tests {
             panic!("expected Watch subcommand");
         };
         assert!(follow_new);
+    }
+
+    #[test]
+    fn watch_args_filter_is_repeatable_and_kept_as_typed() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "watch",
+            "--follow-new",
+            "--filter",
+            "train",
+            "--filter",
+            "Eval",
+        ])
+        .unwrap();
+        let Some(Commands::Watch { filters, .. }) = cli.command else {
+            panic!("expected Watch subcommand");
+        };
+        assert_eq!(filters, ["train", "Eval"]);
+    }
+
+    #[test]
+    fn watch_args_filter_rejects_blank_pattern() {
+        assert!(Cli::try_parse_from(["hmn", "watch", "--filter", ""]).is_err());
+        assert!(Cli::try_parse_from(["hmn", "watch", "--filter", "  "]).is_err());
+    }
+
+    #[test]
+    fn watch_args_filter_with_explicit_pids_parses_clean() {
+        // Like `--follow-new` + PIDs: clap accepts it, `Selection::new`
+        // rejects it at runtime (exit `2`) — see its own tests.
+        let cli = Cli::try_parse_from(["hmn", "watch", "1234", "--filter", "x"]).unwrap();
+        let Some(Commands::Watch { pids, filters, .. }) = cli.command else {
+            panic!("expected Watch subcommand");
+        };
+        assert_eq!(pids, [1234]);
+        assert_eq!(filters, ["x"]);
     }
 
     #[test]
