@@ -98,6 +98,15 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   resolved after `nvmlInit_v2` rather than before, so a missing symbol costs one balanced
   init/shutdown pair before the same `None`; and the init-failure trace names its caller for
   `query` too. Audit item 9/9 (part 1).
+- **One column-table renderer** (`src/bin/hmn/format.rs`) — `hmn ps`'s listing, `hmn watch`'s
+  interval rows and its closing per-PID block were three hand-rolled renderers of one shape: a
+  `Vec` of cells per column, a `column_width` call per column, a six- or seven-deep `zip` chain and
+  a `writeln!`. All three now build a `Table` and `render` it, differing only in their headers,
+  cells and line prefixes. Verified byte-identical, not just shape-identical: all three renderers,
+  run on fixtures including multibyte process names and empty inputs, produce the same 1,247
+  bytes before and after, and every exact-string formatter test passes unchanged. Two new tests
+  pin `Table`'s own contract (last column padded; a header-less render still sizes columns to
+  their headers). Audit item 9/9 (part 2).
 
 ### Fixed
 

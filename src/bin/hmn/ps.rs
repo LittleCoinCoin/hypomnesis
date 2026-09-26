@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use clap::ValueEnum;
 use hypomnesis::{Result, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
-use crate::format::{column_width, format_vram, format_vram_precise, json_escape, spill_cell};
+use crate::format::{Table, format_vram, format_vram_precise, json_escape, spill_cell};
 
 /// One row of `hmn ps` output (binary-internal — not part of the
 /// library's public API).
@@ -326,61 +326,24 @@ fn format_ps_summary(
 
 /// Format `ps` rows as a fixed-column text table. Always prints the
 /// header, even when `rows` is empty.
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_ps_table(rows: &[PsRow]) -> String {
-    let pid_header = "PID";
-    let name_header = "NAME";
-    let vram_header = "VRAM";
-    let shared_header = "SHARED";
-    let device_header = "DEVICE";
-    let spill_header = "SPILL";
-
-    let pid_cells: Vec<String> = rows.iter().map(|r| r.pid.to_string()).collect();
-    let name_cells: Vec<&str> = rows
-        .iter()
-        .map(|r| r.name.as_deref().unwrap_or("?"))
-        .collect();
-    let vram_cells: Vec<String> = rows.iter().map(|r| format_vram(r.used_bytes)).collect();
-    let shared_cells: Vec<String> = rows
-        .iter()
-        .map(|r| format_vram(r.shared_used_bytes))
-        .collect();
-    let device_cells: Vec<String> = rows
-        .iter()
-        .map(|r| {
+    let mut table = Table::new(&["PID", "NAME", "VRAM", "SHARED", "DEVICE", "SPILL"]);
+    for r in rows {
+        table.push_row(vec![
+            r.pid.to_string(),
+            // BORROW: explicit to_owned — the table owns its cells; "?" is
+            // the "can't tell" glyph for an unresolved name.
+            r.name.as_deref().unwrap_or("?").to_owned(),
+            format_vram(r.used_bytes),
+            format_vram(r.shared_used_bytes),
             r.device_name
                 .clone()
-                .unwrap_or_else(|| format!("GPU {}", r.device_index))
-        })
-        .collect();
-    let spill_cells: Vec<&str> = rows.iter().map(|r| spill_cell(r.spilling)).collect();
-
-    let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
-    let name_w = column_width(name_header, name_cells.iter().copied());
-    let vram_w = column_width(vram_header, vram_cells.iter().map(String::as_str));
-    let shared_w = column_width(shared_header, shared_cells.iter().map(String::as_str));
-    let device_w = column_width(device_header, device_cells.iter().map(String::as_str));
-    let spill_w = column_width(spill_header, spill_cells.iter().copied());
-
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "{pid_header:<pid_w$}  {name_header:<name_w$}  {vram_header:<vram_w$}  {shared_header:<shared_w$}  {device_header:<device_w$}  {spill_header:<spill_w$}",
-    );
-    for (((((pid, name), vram), shared), device), spill) in pid_cells
-        .iter()
-        .zip(&name_cells)
-        .zip(&vram_cells)
-        .zip(&shared_cells)
-        .zip(&device_cells)
-        .zip(&spill_cells)
-    {
-        let _ = writeln!(
-            out,
-            "{pid:<pid_w$}  {name:<name_w$}  {vram:<vram_w$}  {shared:<shared_w$}  {device:<device_w$}  {spill:<spill_w$}",
-        );
+                .unwrap_or_else(|| format!("GPU {}", r.device_index)),
+            // BORROW: explicit to_owned — the table owns its cells.
+            spill_cell(r.spilling).to_owned(),
+        ]);
     }
-    out
+    table.render(Some(""), "")
 }
 
 /// Format `ps` rows as a JSON array, one object per row. Hand-rolled

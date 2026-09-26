@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use hypomnesis::{GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_processes};
 
 use crate::format::{
-    column_width, device_name_suffix, duration_ms, format_vram, iso8601_utc_millis, json_escape,
+    Table, device_name_suffix, duration_ms, format_vram, iso8601_utc_millis, json_escape,
     spill_cell,
 };
 use crate::ps::{PsRow, SortKey, ps_row_comparator};
@@ -367,53 +367,32 @@ fn process_sample(
 /// consecutive intervals may re-align slightly as values change width,
 /// an acceptable trade-off for a continuously-appended stream (`--json`
 /// is the stable-shape option for scripts).
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String {
-    let time_label = format!("+{:.1}s", elapsed.as_secs_f64());
-    let pid_header = "PID";
-    let name_header = "NAME";
-    let committed_header = "COMMITTED";
-    let dcommit_header = "\u{394}COMMIT";
-    let shared_header = "SHARED";
-    let dshared_header = "\u{394}SHARED";
-    let spill_header = "SPILL";
-
-    let pid_cells: Vec<String> = rows.iter().map(|r| r.pid.to_string()).collect();
-    let name_cells: Vec<&str> = rows
-        .iter()
-        .map(|r| r.name.as_deref().unwrap_or("?"))
-        .collect();
-    let committed_cells: Vec<String> = rows.iter().map(|r| format_vram(r.used_bytes)).collect();
-    let dcommit_cells: Vec<String> = rows.iter().map(|r| format_delta(r.used_delta)).collect();
-    let shared_cells: Vec<String> = rows.iter().map(|r| format_vram(r.shared_bytes)).collect();
-    let dshared_cells: Vec<String> = rows.iter().map(|r| format_delta(r.shared_delta)).collect();
-    let spill_cells: Vec<&str> = rows.iter().map(|r| spill_cell(r.spilling)).collect();
-
-    let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
-    let name_w = column_width(name_header, name_cells.iter().copied());
-    let committed_w = column_width(committed_header, committed_cells.iter().map(String::as_str));
-    let dcommit_w = column_width(dcommit_header, dcommit_cells.iter().map(String::as_str));
-    let shared_w = column_width(shared_header, shared_cells.iter().map(String::as_str));
-    let dshared_w = column_width(dshared_header, dshared_cells.iter().map(String::as_str));
-    let spill_w = column_width(spill_header, spill_cells.iter().copied());
-
-    let mut out = String::new();
-    for ((((((pid, name), committed), dcommit), shared), dshared), spill) in pid_cells
-        .iter()
-        .zip(&name_cells)
-        .zip(&committed_cells)
-        .zip(&dcommit_cells)
-        .zip(&shared_cells)
-        .zip(&dshared_cells)
-        .zip(&spill_cells)
-    {
-        let _ = writeln!(
-            out,
-            "{time_label:<8}  {pid:<pid_w$}  {name:<name_w$}  {committed:<committed_w$}  \
-             {dcommit:<dcommit_w$}  {shared:<shared_w$}  {dshared:<dshared_w$}  {spill:<spill_w$}",
-        );
+    let mut table = Table::new(&[
+        "PID",
+        "NAME",
+        "COMMITTED",
+        "\u{394}COMMIT",
+        "SHARED",
+        "\u{394}SHARED",
+        "SPILL",
+    ]);
+    for r in rows {
+        table.push_row(vec![
+            r.pid.to_string(),
+            // BORROW: explicit to_owned — the table owns its cells; "?" is
+            // the "can't tell" glyph for an unresolved name.
+            r.name.as_deref().unwrap_or("?").to_owned(),
+            format_vram(r.used_bytes),
+            format_delta(r.used_delta),
+            format_vram(r.shared_bytes),
+            format_delta(r.shared_delta),
+            // BORROW: explicit to_owned — the table owns its cells.
+            spill_cell(r.spilling).to_owned(),
+        ]);
     }
-    out
+    let time_label = format!("+{:.1}s", elapsed.as_secs_f64());
+    table.render(None, &format!("{time_label:<8}  "))
 }
 
 /// Format the watch column header line (text mode), printed once before
@@ -465,82 +444,35 @@ fn format_watch_rows_json(
 }
 
 /// Format the end-of-watch per-PID peak/baseline block (text mode).
-/// Empty `per_pid` renders as an empty string (nothing to show).
-#[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
+/// Empty `per_pid` renders as an empty string (nothing to show). Data
+/// rows are indented to sit under the header's columns, past its
+/// `hmn watch: per-PID` lead-in.
 fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
     if per_pid.is_empty() {
         return String::new();
     }
-    let pid_header = "PID";
-    let name_header = "NAME";
-    let baseline_committed_header = "BASELINE COMMIT";
-    let peak_committed_header = "PEAK COMMIT";
-    let baseline_shared_header = "BASELINE SHARED";
-    let peak_shared_header = "PEAK SHARED";
-
-    let pid_cells: Vec<String> = per_pid.iter().map(|p| p.pid.to_string()).collect();
-    let name_cells: Vec<&str> = per_pid
-        .iter()
-        .map(|p| p.name.as_deref().unwrap_or("?"))
-        .collect();
-    let baseline_committed_cells: Vec<String> = per_pid
-        .iter()
-        .map(|p| format_vram(p.baseline_used_bytes))
-        .collect();
-    let peak_committed_cells: Vec<String> = per_pid
-        .iter()
-        .map(|p| format_vram(p.peak_used_bytes))
-        .collect();
-    let baseline_shared_cells: Vec<String> = per_pid
-        .iter()
-        .map(|p| format_vram(p.baseline_shared_bytes))
-        .collect();
-    let peak_shared_cells: Vec<String> = per_pid
-        .iter()
-        .map(|p| format_vram(p.peak_shared_bytes))
-        .collect();
-
-    let pid_w = column_width(pid_header, pid_cells.iter().map(String::as_str));
-    let name_w = column_width(name_header, name_cells.iter().copied());
-    let baseline_committed_w = column_width(
-        baseline_committed_header,
-        baseline_committed_cells.iter().map(String::as_str),
-    );
-    let peak_committed_w = column_width(
-        peak_committed_header,
-        peak_committed_cells.iter().map(String::as_str),
-    );
-    let baseline_shared_w = column_width(
-        baseline_shared_header,
-        baseline_shared_cells.iter().map(String::as_str),
-    );
-    let peak_shared_w = column_width(
-        peak_shared_header,
-        peak_shared_cells.iter().map(String::as_str),
-    );
-
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "hmn watch: per-PID  {pid_header:<pid_w$}  {name_header:<name_w$}  \
-         {baseline_committed_header:<baseline_committed_w$}  {peak_committed_header:<peak_committed_w$}  \
-         {baseline_shared_header:<baseline_shared_w$}  {peak_shared_header:<peak_shared_w$}",
-    );
-    for (((((pid, name), bc), pc), bs), ps) in pid_cells
-        .iter()
-        .zip(&name_cells)
-        .zip(&baseline_committed_cells)
-        .zip(&peak_committed_cells)
-        .zip(&baseline_shared_cells)
-        .zip(&peak_shared_cells)
-    {
-        let _ = writeln!(
-            out,
-            "                    {pid:<pid_w$}  {name:<name_w$}  {bc:<baseline_committed_w$}  \
-             {pc:<peak_committed_w$}  {bs:<baseline_shared_w$}  {ps:<peak_shared_w$}",
-        );
+    let mut table = Table::new(&[
+        "PID",
+        "NAME",
+        "BASELINE COMMIT",
+        "PEAK COMMIT",
+        "BASELINE SHARED",
+        "PEAK SHARED",
+    ]);
+    for p in per_pid {
+        table.push_row(vec![
+            p.pid.to_string(),
+            // BORROW: explicit to_owned — the table owns its cells; "?" is
+            // the "can't tell" glyph for an unresolved name.
+            p.name.as_deref().unwrap_or("?").to_owned(),
+            format_vram(p.baseline_used_bytes),
+            format_vram(p.peak_used_bytes),
+            format_vram(p.baseline_shared_bytes),
+            format_vram(p.peak_shared_bytes),
+        ]);
     }
-    out
+    let header_prefix = "hmn watch: per-PID  ";
+    table.render(Some(header_prefix), &" ".repeat(header_prefix.len()))
 }
 
 /// Format the closing summary in text mode: the adapter-level report

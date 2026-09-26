@@ -103,6 +103,87 @@ pub fn column_width<'a>(header: &str, cells: impl IntoIterator<Item = &'a str>) 
         .unwrap_or(0)
 }
 
+/// A column-aligned text table — the one renderer behind `hmn ps`'s
+/// listing and `hmn watch`'s interval rows and closing per-PID block.
+///
+/// Each column is as wide as its widest cell or its header ([`column_width`],
+/// so widths are measured in bytes, as they always have been); cells are
+/// left-aligned, separated by two spaces, and the last column is padded too,
+/// so every line of a table has the same shape.
+pub struct Table {
+    /// Column headers, in display order. Their count fixes the column count.
+    headers: Vec<&'static str>,
+    /// Data rows, one cell per header. A short row renders its missing
+    /// cells as empty; extra cells are ignored.
+    rows: Vec<Vec<String>>,
+}
+
+impl Table {
+    /// An empty table with the given column headers.
+    #[must_use]
+    pub fn new(headers: &[&'static str]) -> Self {
+        Self {
+            headers: headers.to_vec(),
+            rows: Vec::new(),
+        }
+    }
+
+    /// Append one data row.
+    pub fn push_row(&mut self, cells: Vec<String>) {
+        self.rows.push(cells);
+    }
+
+    /// Render the table. With `header_prefix: Some(p)`, a header line —
+    /// prefixed by `p` — comes first; with `None`, no header line is
+    /// printed, but the headers still count toward the column widths. Every
+    /// data row is prefixed by `row_prefix`. Each line ends in `\n`.
+    #[must_use]
+    pub fn render(&self, header_prefix: Option<&str>, row_prefix: &str) -> String {
+        let widths: Vec<usize> = self
+            .headers
+            .iter()
+            .enumerate()
+            .map(|(col, header)| column_width(header, self.rows.iter().map(|r| cell(r, col))))
+            .collect();
+        let mut out = String::new();
+        if let Some(prefix) = header_prefix {
+            write_table_line(&mut out, prefix, self.headers.iter().copied(), &widths);
+        }
+        for row in &self.rows {
+            write_table_line(
+                &mut out,
+                row_prefix,
+                (0..widths.len()).map(|col| cell(row, col)),
+                &widths,
+            );
+        }
+        out
+    }
+}
+
+/// Cell `col` of `row`, or `""` when the row is short.
+fn cell(row: &[String], col: usize) -> &str {
+    row.get(col).map_or("", String::as_str)
+}
+
+/// Write one `prefix`-led table line: each cell left-aligned to its
+/// column's width, two spaces between cells, newline-terminated.
+fn write_table_line<'a>(
+    out: &mut String,
+    prefix: &str,
+    cells: impl Iterator<Item = &'a str>,
+    widths: &[usize],
+) {
+    out.push_str(prefix);
+    for (col, (text, &width)) in cells.zip(widths).enumerate() {
+        if col > 0 {
+            out.push_str("  ");
+        }
+        let _ = write!(out, "{text:<width$}");
+    }
+    out.push('\n');
+}
+
 /// Escape a string for JSON output. Hand-rolled to avoid pulling in
 /// `serde_json` for the CLI feature.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
@@ -410,6 +491,27 @@ mod tests {
         assert_eq!(column_width("PID", ["1", "12345"]), 5);
         assert_eq!(column_width("HEADER", ["a", "bc"]), 6);
         assert_eq!(column_width("PID", std::iter::empty::<&str>()), 3);
+    }
+
+    // --- Table ---
+
+    #[test]
+    fn table_render_pads_every_column_including_the_last() {
+        let mut t = Table::new(&["A", "LONG"]);
+        t.push_row(vec!["xyz".to_owned(), "1".to_owned()]);
+        assert_eq!(t.render(Some("> "), ". "), "> A    LONG\n. xyz  1   \n");
+    }
+
+    #[test]
+    fn table_render_without_header_still_sizes_columns_to_headers() {
+        // `hmn watch` rows print no header line, yet stay as wide as the
+        // header its caller printed once up front.
+        let mut t = Table::new(&["WIDE_HEADER", "B"]);
+        t.push_row(vec!["x".to_owned()]); // short row: missing cell renders empty
+        // Column 0 is `WIDE_HEADER`-wide (11); column 1 is `B`-wide (1) and
+        // its missing cell still pads to that width.
+        assert_eq!(t.render(None, ""), format!("{:<11}  {:<1}\n", "x", ""));
+        assert_eq!(Table::new(&["A"]).render(None, ""), "");
     }
 
     // --- json_escape ---

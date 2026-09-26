@@ -48,7 +48,7 @@ contract only after a parity test guards the first four.
 | 6 | One `SpillReport` JSON field writer replacing four spellings | refactor | ✅ |
 | 7 | Split `src/bin/hmn.rs` per subcommand into `src/bin/hmn/` | refactor | ✅ |
 | 8 | One `DXGI` adapter walker (visitor closure) for all six walks | refactor | ✅ |
-| 9 | `NvmlSession` RAII guard; one column-table renderer | refactor | ⏳ (1 of 2 done) |
+| 9 | `NvmlSession` RAII guard; one column-table renderer | refactor | ✅ |
 
 Design decisions taken before starting, and why:
 
@@ -69,12 +69,18 @@ the entry is accurate: it already says *"only the dedicated-threshold arithmetic
 shared"*, and its real motivation is letting `snapshot_is_spilling` honour the threshold overrides
 `SpillTracker` exposes — a behaviour question, not a duplication one. Left unchanged.
 
-### Follow-up observed, not in scope
+### Follow-ups observed, not in scope
 
 Every `HypomnesisError::Pdh` message in `src/gpu/pdh.rs` uses the house form `"<Api> failed:
 0x…"` rather than `CONVENTIONS.md`'s `"failed to <verb>: {e}"`. Item 5 moves one of them without
 rewording it, since changing one would break the file's internal consistency. A file-wide pass is a
 separate decision: the strings are user-visible through `HypomnesisError`'s `Display`.
+
+The text tables measure column widths in **bytes** (`column_width` uses `str::len`) but `{:<w$}`
+pads in **chars**, so a row with a non-ASCII process name gets more padding than it needs and its
+columns can drift right. Item 9 preserved this byte-for-byte on purpose — changing it changes
+`hmn ps` and `hmn watch` output — so it is a separate, visible decision. A fix would measure
+widths in chars, or in display columns if East Asian wide characters are to line up too.
 
 ---
 
