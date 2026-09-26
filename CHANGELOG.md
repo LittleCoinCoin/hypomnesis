@@ -68,6 +68,20 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   unchanged (Cargo discovers `src/bin/hmn/main.rs`). Items shared across modules are `pub`
   inside their private module — clippy's `redundant_pub_crate` rejects `pub(crate)` /
   `pub(super)` directly under a binary's root. Audit item 7/9.
+- **One `DXGI` adapter walker** (`src/gpu/dxgi.rs`, `CONVENTIONS.md`) — the six functions that
+  each carried their own `CreateDXGIFactory1` + `EnumAdapters1` loop (`query`, `adapter_name`,
+  `adapter_luid`, `adapter_dedicated_video_memory`, `enumerate_non_nvidia`, `device_count`) now
+  share `walk_adapters`, a visitor-closure walker that owns the skip-a-bad-adapter policy (the
+  behaviour item 3/9 brought to all six) and keeps COM pointers inside its own frame per
+  `CONVENTIONS.md` Pattern 3. Thin `nth_nvidia_adapter` / `for_each_adapter` wrappers serve the
+  per-index lookups and the exhaustive walks; `is_nvidia_dgpu`, `description` and `bytes` replace
+  five copies of the NVIDIA filter, three of the UTF-16 name trim and four `usize → u64` casts.
+  The file shrinks from 579 to 434 lines while gaining a module-doc section on the walker. Each
+  function's factory-failure result is unchanged. Verified behaviour-preserving: all 16 ignored
+  live `DXGI`/`PDH` tests pass, and their `debug-output` `DXGI` traces are identical to a build of
+  the previous commit. The skip trace no longer names which lookup was walking (there is now one
+  walker). `CONVENTIONS.md` Pattern 3 now routes all new enumeration through the walker. Audit
+  item 8/9.
 
 ### Fixed
 

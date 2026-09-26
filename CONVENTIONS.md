@@ -294,6 +294,13 @@ Used for DXGI on Windows. The `windows` crate handles refcounting via
   `Result` and surface failure as `HypomnesisError::Dxgi`.
 - Do not store COM pointers across function boundaries; they are cheap
   to re-acquire and have non-trivial thread-safety considerations.
+- Enumerate adapters only through `walk_adapters` in `src/gpu/dxgi.rs`
+  (directly, or via `nth_nvidia_adapter` / `for_each_adapter`), never
+  with a new `EnumAdapters1` loop. The walker owns the skip-a-bad-adapter
+  policy, so every lookup agrees on NVIDIA index numbering; it takes a
+  visitor closure precisely so COM pointers stay inside its frame, per
+  the rule above. (Six hand-rolled loops once let a robustness fix reach
+  only two of them.)
 - Prefer `&raw mut foo` over `&mut foo as *mut _` for taking pointers
   to be passed into FFI (Rust 2024 edition idiom).
 
