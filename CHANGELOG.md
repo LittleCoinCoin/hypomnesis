@@ -49,6 +49,13 @@ selection. Plan: [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md).
   Now `QueryGuard::open()` — which also makes the guard's "handle came from a successful open"
   invariant, relied on by its `Drop`, hold by construction — and `target_luid()`. Error messages
   unchanged. Audit item 5/9.
+- **One writer for the `SpillReport` JSON contract** (`src/bin/hmn.rs`) — the nine-field
+  adapter-level object was spelled out four times: the `SPILL_JSON_UNMEASURABLE` constant,
+  `format_spill_json`, and both arms of `format_watch_summary_json`. All four now go through one
+  `write_spill_report_fields(out, Option<&SpillReport>)`; `format_spill_json` takes an `Option`
+  and the constant is gone. Verified byte-identical: all four outputs, captured before and after
+  from the same fixtures, match to the byte (1,617 bytes), and the no-tracker test now asserts the
+  exact former constant rather than its prefix and suffix. Audit item 6/9.
 
 ### Fixed
 

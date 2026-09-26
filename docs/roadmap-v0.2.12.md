@@ -45,7 +45,7 @@ contract only after a parity test guards the first four.
 | 3 | `DXGI` walks skip a bad adapter instead of aborting (4 remaining walks) | **fix** | ✅ |
 | 4 | Docs-only: stale forward reference, `test-helpers` comment, `CHANGELOG` link references, `MemoryReport` MiB note, `tests/common` comment (the `spill_condition` roadmap rewording was withdrawn — see below) | docs | ✅ |
 | 5 | `run_smi()` (`nvidia-smi`); `QueryGuard::open()` / `target_luid()` (`PDH`) | refactor | ✅ |
-| 6 | One `SpillReport` JSON field writer replacing four spellings | refactor | ⏳ |
+| 6 | One `SpillReport` JSON field writer replacing four spellings | refactor | ✅ |
 | 7 | Split `src/bin/hmn.rs` per subcommand into `src/bin/hmn/` | refactor | ⏳ |
 | 8 | One `DXGI` adapter walker (visitor closure) for all six walks | refactor | ⏳ |
 | 9 | `NvmlSession` RAII guard; one column-table renderer | refactor | ⏳ |

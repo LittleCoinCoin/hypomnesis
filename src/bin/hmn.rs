@@ -955,18 +955,6 @@ fn format_ps_json(rows: &[PsRow]) -> String {
 // `spill` subcommand
 // -----------------------------------------------------------------------------
 
-/// All-zeros JSON object emitted by `hmn spill --json` when no
-/// `SpillTracker` could be constructed at all (hard error path), so
-/// scripted consumers still receive a parseable object with
-/// `measurable: false` rather than empty stdout.
-const SPILL_JSON_UNMEASURABLE: &str = concat!(
-    r#"{"measurable":false,"spilled":false,"observations":0,"#,
-    r#""baseline_shared_bytes":0,"peak_shared_bytes":0,"#,
-    r#""peak_dedicated_bytes":0,"dedicated_limit_bytes":0,"#,
-    r#""total_spill_duration_ms":0,"episodes":[]}"#,
-    "\n"
-);
-
 /// Run the `spill` subcommand: spawn the wrapped command with
 /// inherited stdio, poll a [`SpillTracker`] every `interval_ms` until
 /// the child exits, print the report (stderr human block; optional
@@ -1029,7 +1017,7 @@ fn run_spill(
     }
     if let Some(report) = tracker.map(SpillTracker::into_report) {
         if json {
-            print!("{}", format_spill_json(&report));
+            print!("{}", format_spill_json(Some(&report)));
         }
         if report.measurable {
             eprint!("{}", format_spill_report(&report));
@@ -1039,7 +1027,7 @@ fn run_spill(
     } else {
         // Tracker construction failed (already warned above).
         if json {
-            print!("{SPILL_JSON_UNMEASURABLE}");
+            print!("{}", format_spill_json(None));
         }
         eprintln!("hmn spill: spill not measurable (no tracker)");
     }
@@ -1196,9 +1184,9 @@ fn format_spill_report(report: &SpillReport) -> String {
 }
 
 /// Write a [`SpillReport`]'s episodes as a JSON array (`[...]`, no
-/// trailing content) into `out`. Shared by [`format_spill_json`] and
-/// `hmn watch`'s summary JSON so the episode shape and escaping
-/// ([`json_escape`]) stay identical across both subcommands' `--json`
+/// trailing content) into `out`. Called only by
+/// [`write_spill_report_fields`], so the episode shape and escaping
+/// ([`json_escape`]) are identical across both subcommands' `--json`
 /// output.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn write_episodes_json(out: &mut String, episodes: &[SpillEpisode]) {
@@ -1223,25 +1211,41 @@ fn write_episodes_json(out: &mut String, episodes: &[SpillEpisode]) {
     out.push(']');
 }
 
-/// Format a [`SpillReport`] as a single JSON object. Hand-rolled (no
-/// `serde` dep — same policy as [`format_ps_json`]); labels are
-/// escaped via [`json_escape`]; durations are integer milliseconds.
+/// Write the adapter-level [`SpillReport`] JSON fields — `"measurable"`
+/// through `"episodes":[...]`, without surrounding braces — into `out`.
+///
+/// The one spelling of that wire contract: [`format_spill_json`] wraps
+/// it in braces for `hmn spill --json`, and
+/// [`format_watch_summary_json`] embeds it after its `"kind"` tag for
+/// `hmn watch --json`. `None` (no `SpillTracker` could be constructed)
+/// writes the all-zeros `"measurable":false` shape, so scripted
+/// consumers parse one shape either way. Hand-rolled (no `serde` dep —
+/// same policy as [`format_ps_json`]); labels are escaped via
+/// [`json_escape`]; durations are integer milliseconds.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
-fn format_spill_json(report: &SpillReport) -> String {
-    let mut out = String::new();
+fn write_spill_report_fields(out: &mut String, report: Option<&SpillReport>) {
     let _ = write!(
         out,
-        r#"{{"measurable":{},"spilled":{},"observations":{},"baseline_shared_bytes":{},"peak_shared_bytes":{},"peak_dedicated_bytes":{},"dedicated_limit_bytes":{},"total_spill_duration_ms":{},"episodes":"#,
-        report.measurable,
-        report.spilled(),
-        report.observations,
-        report.baseline_shared_bytes,
-        report.peak_shared_bytes,
-        report.peak_dedicated_bytes,
-        report.dedicated_limit_bytes,
-        duration_ms(report.total_spill_duration()),
+        r#""measurable":{},"spilled":{},"observations":{},"baseline_shared_bytes":{},"peak_shared_bytes":{},"peak_dedicated_bytes":{},"dedicated_limit_bytes":{},"total_spill_duration_ms":{},"episodes":"#,
+        report.is_some_and(|r| r.measurable),
+        report.is_some_and(SpillReport::spilled),
+        report.map_or(0, |r| r.observations),
+        report.map_or(0, |r| r.baseline_shared_bytes),
+        report.map_or(0, |r| r.peak_shared_bytes),
+        report.map_or(0, |r| r.peak_dedicated_bytes),
+        report.map_or(0, |r| r.dedicated_limit_bytes),
+        report.map_or(0, |r| duration_ms(r.total_spill_duration())),
     );
-    write_episodes_json(&mut out, &report.episodes);
+    write_episodes_json(out, report.map_or(&[], |r| &r.episodes));
+}
+
+/// Format a [`SpillReport`] — or, for `None`, the all-zeros
+/// `"measurable":false` fallback — as a single newline-terminated JSON
+/// object for `hmn spill --json`. See [`write_spill_report_fields`].
+#[must_use]
+fn format_spill_json(report: Option<&SpillReport>) -> String {
+    let mut out = String::from("{");
+    write_spill_report_fields(&mut out, report);
     out.push_str("}\n");
     out
 }
@@ -1896,33 +1900,13 @@ fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSu
 /// Format the closing summary as one JSON object:
 /// `{"kind":"summary",...adapter SpillReport fields...,"per_pid":[...]}`.
 /// `report: None` (spill tracking unavailable) emits the same
-/// all-zeros `"measurable":false` shape [`SPILL_JSON_UNMEASURABLE`]
-/// uses, so scripted consumers always parse one shape either way.
+/// all-zeros `"measurable":false` shape `hmn spill --json` uses — both
+/// go through [`write_spill_report_fields`] — so scripted consumers
+/// always parse one shape either way.
 #[allow(clippy::missing_panics_doc)] // writes to a String; cannot fail in practice
 fn format_watch_summary_json(report: Option<&SpillReport>, per_pid: &[WatchPidSummary]) -> String {
     let mut out = String::from(r#"{"kind":"summary","#);
-    match report {
-        Some(r) => {
-            let _ = write!(
-                out,
-                r#""measurable":{},"spilled":{},"observations":{},"baseline_shared_bytes":{},"peak_shared_bytes":{},"peak_dedicated_bytes":{},"dedicated_limit_bytes":{},"total_spill_duration_ms":{},"episodes":"#,
-                r.measurable,
-                r.spilled(),
-                r.observations,
-                r.baseline_shared_bytes,
-                r.peak_shared_bytes,
-                r.peak_dedicated_bytes,
-                r.dedicated_limit_bytes,
-                duration_ms(r.total_spill_duration()),
-            );
-            write_episodes_json(&mut out, &r.episodes);
-        }
-        None => {
-            out.push_str(
-                r#""measurable":false,"spilled":false,"observations":0,"baseline_shared_bytes":0,"peak_shared_bytes":0,"peak_dedicated_bytes":0,"dedicated_limit_bytes":0,"total_spill_duration_ms":0,"episodes":[]"#,
-            );
-        }
-    }
+    write_spill_report_fields(&mut out, report);
     out.push_str(r#","per_pid":["#);
     for (i, p) in per_pid.iter().enumerate() {
         if i > 0 {
@@ -3336,7 +3320,7 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn format_spill_json_shape() {
-        let s = format_spill_json(&spilling_report());
+        let s = format_spill_json(Some(&spilling_report()));
         assert!(s.starts_with("{\"measurable\":true,\"spilled\":true,\"observations\":200,"));
         assert!(s.contains("\"total_spill_duration_ms\":9800,"));
         assert!(s.contains("\"episodes\":[{\"start_label\":\"+12.4s\",\"end_label\":\"+15.5s\","));
@@ -3346,7 +3330,7 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn format_spill_json_null_end_label() {
-        let s = format_spill_json(&spilling_report());
+        let s = format_spill_json(Some(&spilling_report()));
         assert!(s.contains("\"start_label\":\"+20.0s\",\"end_label\":null,"));
     }
 
@@ -3357,16 +3341,23 @@ mod tests {
             .measurable(true)
             .episode("weird\"label", None, 0, 1, Duration::ZERO)
             .build();
-        let s = format_spill_json(&report);
+        let s = format_spill_json(Some(&report));
         assert!(s.contains(r#""start_label":"weird\"label""#));
     }
 
     #[test]
-    fn spill_json_unmeasurable_constant_is_valid_shape() {
-        // The hard-error fallback object mirrors format_spill_json's
-        // field order so scripted consumers parse one shape.
-        assert!(SPILL_JSON_UNMEASURABLE.starts_with("{\"measurable\":false,\"spilled\":false,"));
-        assert!(SPILL_JSON_UNMEASURABLE.ends_with("\"episodes\":[]}\n"));
+    fn spill_json_unmeasurable_is_the_all_zeros_shape() {
+        // The hard-error fallback (no SpillTracker at all), pinned
+        // byte-for-byte: this is the exact object the pre-v0.2.12
+        // `SPILL_JSON_UNMEASURABLE` constant emitted, so scripted
+        // consumers see no change now that it is generated.
+        assert_eq!(
+            format_spill_json(None),
+            "{\"measurable\":false,\"spilled\":false,\"observations\":0,\
+             \"baseline_shared_bytes\":0,\"peak_shared_bytes\":0,\
+             \"peak_dedicated_bytes\":0,\"dedicated_limit_bytes\":0,\
+             \"total_spill_duration_ms\":0,\"episodes\":[]}\n"
+        );
     }
 
     // --- format_spill_report_with_prefix (generalized under `hmn watch`) ---
@@ -3391,7 +3382,7 @@ mod tests {
         let report = spilling_report();
         let mut direct = String::new();
         write_episodes_json(&mut direct, &report.episodes);
-        let whole = format_spill_json(&report);
+        let whole = format_spill_json(Some(&report));
         assert!(whole.contains(&direct));
     }
 
@@ -4407,10 +4398,12 @@ mod tests {
     // The adapter-level `SpillReport` object is emitted by `hmn spill
     // --json` (measurable, and the no-tracker fallback) and embedded in
     // `hmn watch --json`'s closing summary (measurable, and the
-    // no-tracker fallback). The shape tests above pin only each
-    // string's ends; these pin the whole ordered key list, so a field
-    // added to, renamed in, or reordered in one emitter but not the
-    // others fails here instead of silently diverging on the wire.
+    // no-tracker fallback). All four paths now go through
+    // `write_spill_report_fields`; these tests pin the whole ordered key
+    // list on every one of them, so an output path that stops going
+    // through the writer, or a key change nobody meant to make, fails
+    // here instead of silently diverging on the wire. (They predate the
+    // writer: added while the four paths were still four spellings.)
 
     /// The canonical ordered key list of the adapter-level `SpillReport`
     /// JSON object — the one place a new field must be added first.
@@ -4485,7 +4478,7 @@ mod tests {
     fn spill_json_unmeasurable_fallbacks_share_the_canonical_keys() {
         // `hmn spill` with no tracker, and `hmn watch` with no tracker.
         assert_eq!(
-            spill_report_keys(SPILL_JSON_UNMEASURABLE),
+            spill_report_keys(&format_spill_json(None)),
             SPILL_REPORT_JSON_KEYS
         );
         let watch = format_watch_summary_json(None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
@@ -4499,7 +4492,7 @@ mod tests {
         // a non-empty per_pid, so nested keys are present to be excluded.
         let report = spilling_report();
         assert_eq!(
-            spill_report_keys(&format_spill_json(&report)),
+            spill_report_keys(&format_spill_json(Some(&report))),
             SPILL_REPORT_JSON_KEYS
         );
         let watch = format_watch_summary_json(
