@@ -44,19 +44,19 @@ jobs:
       # and a library-only set with no `clap`/`ctrlc`); check both here
       # so they can't silently drift from what's advertised.
       - name: Check (no default features)
-        run: cargo check --no-default-features
+        run: cargo check --locked --no-default-features
 
       - name: Check (library-only feature set)
-        run: cargo check --no-default-features --features nvml,dxgi,pdh
+        run: cargo check --locked --no-default-features --features nvml,dxgi,pdh
 
       - name: Clippy (defaults)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Clippy (all features)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Tests
-        run: cargo test --all-features
+        run: cargo test --locked --all-features
 
   doc:
     # Separate doc-check job: catches broken intra-doc links early

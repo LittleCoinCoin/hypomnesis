@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commit SHA, and Dependabot keeps the pins current. A new `deny` CI job runs
   `cargo-deny` against `deny.toml` (RustSec advisories and yanked crates,
   permissive licences only, crates.io as the only source).
+- **No dependency code runs while the release job can mint a publish token.**
+  The first Trusted Publishing workflow ran the tests (and so every
+  dependency's build scripts and proc-macros) in the job that held
+  `id-token: write`. `publish.yml` is now two jobs: `verify` builds, tests and
+  packages with a read-only token, and `publish` holds `id-token: write` and
+  runs `cargo publish --no-verify`, which compiles nothing. Every cargo command
+  in `publish.yml` and `ci.yml` uses `--locked`.
 
 ## [0.2.12] - 2026-09-26
 
