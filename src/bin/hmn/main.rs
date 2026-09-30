@@ -195,7 +195,9 @@ enum Commands {
         #[arg(long = "pid", value_name = "PID")]
         pids: Vec<u32>,
         /// Filter to a single GPU index. Default: every device reported
-        /// by `device_count()`.
+        /// by `device_count()`. An index that cannot be listed (out of
+        /// range, or its query failing) is an error, exit `2`, rather than
+        /// an empty table that would read as an idle card.
         #[arg(long, value_name = "INDEX")]
         device: Option<u32>,
         /// Hide rows below this total footprint (`used_bytes +
@@ -428,6 +430,8 @@ fn main() -> std::process::ExitCode {
     }
     let outcome = match cli.command {
         None => run_summary(cli.json),
+        // `ps` also bypasses the Ok/Err fold: an unlistable `--device` is
+        // exit `2`, like `fits`, not the fold's generic `1`.
         Some(Commands::Ps {
             pids,
             device,
@@ -435,7 +439,7 @@ fn main() -> std::process::ExitCode {
             filters,
             sort,
             json,
-        }) => run_ps(&PsFilters::new(&pids, device, min, filters), sort, json),
+        }) => return run_ps(&PsFilters::new(&pids, device, min, filters), sort, json),
         // `spill` bypasses the Ok/Err fold below: its exit code is the
         // wrapped command's, passed through — not hmn's own
         // success/failure.

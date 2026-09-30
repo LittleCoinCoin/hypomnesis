@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`hmn ps --device <N>` with an index it cannot list is an error** (`src/bin/hmn/ps.rs`,
+  `main.rs`) — `hmn ps --device 3` on a one-GPU machine exited `0` with an empty table and
+  `0 GPU processes found matching device=3.`, so a mistyped index read as an idle card, while
+  `hmn fits 1GiB --device 3` already exited `2`. It now exits `2` with
+  `hmn: ps failed to query device 3: device index 3 out of range (have 1 devices)`, and likewise
+  when the named device's query fails outright. Without `--device`, a failing device is still
+  skipped so one broken device does not hide the others. `run_ps` now returns the exit code
+  itself, like `run_fits` and `run_watch`. Same report, request 5.
 - **`hmn watch` no longer reports a spill check it could not run** (`src/bin/hmn/watch.rs`) —
   where spill is not measurable (every Linux and macOS run, and Windows without a usable adapter
   counter set), the text summary printed the all-zeros spill report: `peak dedicated 0 MiB` and

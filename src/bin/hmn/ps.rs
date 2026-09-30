@@ -5,11 +5,10 @@
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::process::ExitCode;
 
 use clap::ValueEnum;
-use hypomnesis::{
-    GpuProcessEntry, Result, device_count, device_info, gpu_processes, snapshot_is_spilling,
-};
+use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
     Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
@@ -237,13 +236,15 @@ pub fn matches_any(name: &str, patterns: &[String]) -> bool {
 /// device(s) — sampling one live adapter-wide spill check per device
 /// along the way (see [`snapshot_is_spilling`]) — apply `filters`, sort
 /// per `--sort`, then emit either a text table or JSON.
-//
-// Returns `Result<()>` for symmetry with `run_summary` so `main` can
-// dispatch through one match arm. The body never produces an `Err` (per-device
-// failures are swallowed via `continue` so one broken device doesn't kill the
-// whole listing); the lint is allowed for that reason.
-#[allow(clippy::unnecessary_wraps)]
-pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
+///
+/// Returns the exit code, bypassing `main`'s `Ok`/`Err` fold like
+/// `run_fits` and `run_watch`: `0` normally, `2` when a device named by
+/// `--device` cannot be listed — out of range (`device index 3 out of
+/// range (have 1 devices)`, the library's own bounds check) or failing
+/// outright. Without `--device`, a device that fails is skipped so one
+/// broken device does not kill the whole listing; with it, the user asked
+/// for that device alone, and an empty table would read as an idle card.
+pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> ExitCode {
     // device_count returning Err here means no enumeration backend is
     // enabled / every backend failed; treat as zero NVIDIA devices and
     // let the empty Vec fall through to the formatter (which prints
@@ -283,8 +284,13 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
         // gpu_processes()'s own call duration, the same call-ordering
         // discipline `hmn watch`'s wall_clock/t_ms pairing uses.
         let spilling = snapshot_is_spilling(idx);
-        let Ok(entries) = gpu_processes(idx) else {
-            continue;
+        let entries = match gpu_processes(idx) {
+            Ok(entries) => entries,
+            Err(e) if filters.device.is_some() => {
+                eprintln!("hmn: ps failed to query device {idx}: {e}");
+                return ExitCode::from(2);
+            }
+            Err(_) => continue,
         };
         for entry in entries {
             match filters.judge(&entry) {
@@ -331,7 +337,7 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
     // consistent confirmation rather than an error indicator. Redirect
     // 2>/dev/null to suppress.
     eprintln!("hmn: {}", format_ps_summary(&rows, filters, unnamed));
-    Ok(())
+    ExitCode::SUCCESS
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
