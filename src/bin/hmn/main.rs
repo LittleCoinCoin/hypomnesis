@@ -188,9 +188,12 @@ enum Commands {
     /// elevated (`sudo`) to include cross-user PIDs. See `hmn --help`
     /// Limitations for the full per-platform breakdown.
     Ps {
-        /// Filter to processes whose PID matches.
-        #[arg(long, value_name = "PID")]
-        pid: Option<u32>,
+        /// Keep only this PID. Repeatable (`--pid A --pid B`): a process
+        /// matching any of them is listed — a launcher's wrapper and its
+        /// GPU child, or two chained runs. The PIDs are echoed on the
+        /// summary line.
+        #[arg(long = "pid", value_name = "PID")]
+        pids: Vec<u32>,
         /// Filter to a single GPU index. Default: every device reported
         /// by `device_count()`.
         #[arg(long, value_name = "INDEX")]
@@ -426,22 +429,13 @@ fn main() -> std::process::ExitCode {
     let outcome = match cli.command {
         None => run_summary(cli.json),
         Some(Commands::Ps {
-            pid,
+            pids,
             device,
             min,
             filters,
             sort,
             json,
-        }) => run_ps(
-            &PsFilters {
-                pid,
-                device,
-                min_bytes: min,
-                patterns: filters,
-            },
-            sort,
-            json,
-        ),
+        }) => run_ps(&PsFilters::new(&pids, device, min, filters), sort, json),
         // `spill` bypasses the Ok/Err fold below: its exit code is the
         // wrapped command's, passed through — not hmn's own
         // success/failure.
@@ -579,6 +573,16 @@ mod tests {
             panic!("expected Ps subcommand");
         };
         assert!(filters.is_empty());
+    }
+
+    #[test]
+    fn ps_args_pid_is_repeatable_but_not_comma_separated() {
+        let cli = Cli::try_parse_from(["hmn", "ps", "--pid", "15503", "--pid", "15534"]).unwrap();
+        let Some(Commands::Ps { pids, .. }) = cli.command else {
+            panic!("expected Ps subcommand");
+        };
+        assert_eq!(pids, [15503, 15534]);
+        assert!(Cli::try_parse_from(["hmn", "ps", "--pid", "1,2"]).is_err());
     }
 
     #[test]

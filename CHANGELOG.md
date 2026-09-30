@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [2026-09-28 dogfooding report](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md),
   request 3.
 
+- **`hmn ps --pid` is repeatable** (`src/bin/hmn/main.rs`, `ps.rs`) — `--pid A --pid B` lists
+  a process matching any of them: a launcher's wrapper and its GPU child, or two chained runs.
+  Repeated PIDs are dropped, and the summary echoes each once (`matching pid=15503,15534`). A
+  comma-separated `--pid 1,2` is still rejected. Same report, request 6.
+
 ### Changed
 
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`
