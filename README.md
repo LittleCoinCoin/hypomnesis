@@ -194,8 +194,10 @@ Five subcommands:
 hmn                          # device summary (free / total per GPU)
 hmn --json                   # same data as a JSON array
 hmn ps                       # all GPU processes — discovery command
-hmn ps --pid 12345           # filter to one PID
-hmn ps --device 0            # filter to one GPU on multi-GPU rigs
+hmn ps --pid 12345           # filter to one PID (repeatable since v0.2.13: --pid A --pid B)
+hmn ps --filter canvas       # processes whose name contains "canvas", any case (v0.2.13)
+hmn ps --filter canvas --exit-status   # exit 1 if nothing listed: "is my job on the GPU?" (v0.2.13)
+hmn ps --device 0            # filter to one GPU on multi-GPU rigs (exit 2 if it can't be listed)
 hmn ps --json                # scriptable output
 hmn ps --sort total           # order by dedicated + shared instead of dedicated alone
 hmn ps --min 50MiB            # hide rows below 50 MiB total footprint (since v0.2.11)
@@ -248,6 +250,7 @@ A one-line summary is written to **stderr** after each `hmn ps` run:
 ```
 hmn: 2 GPU processes found (9.6 GiB committed total).
 hmn: 0 GPU processes found matching pid=99 device=0.   # with filters
+hmn: 1 GPU process found matching filter="canvas" (14.2 GiB committed total); device 0 spilling: 154 MiB free, 2.1 GiB shared, 1 process paged.
 ```
 
 The stderr summary is always printed, even when the table is empty, so interactive users get an unambiguous "command worked, here's the count" line without breaking stdout's scriptability. Pipelines like `hmn ps | awk 'NR>1 {print $1}'` or `hmn ps --json | jq` work as expected. Redirect `2>/dev/null` to suppress the summary.

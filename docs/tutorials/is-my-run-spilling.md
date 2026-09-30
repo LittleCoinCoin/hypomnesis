@@ -107,17 +107,23 @@ SHARED column of `hmn ps` (the same quantity as Task Manager's
 ```
 $ hmn ps
 PID    NAME         VRAM      SHARED   DEVICE                      SPILL
-21844  python.exe   15.8 GiB  2.9 GiB  NVIDIA GeForce RTX 5060 Ti  SPILL
-3524   firefox.exe  866 MiB   25 MiB   NVIDIA GeForce RTX 5060 Ti  SPILL
+21844  python.exe   15.8 GiB  2.9 GiB  NVIDIA GeForce RTX 5060 Ti  PAGED
+3524   firefox.exe  866 MiB   25 MiB   NVIDIA GeForce RTX 5060 Ti  device
 ...
+hmn: 24 GPU processes found (18.1 GiB committed total); device 0 spilling: 212 MiB free, 3.0 GiB shared, 1 process paged.
 ```
 
 The SPILL column (since v0.2.11) is a *single-snapshot* approximation of this
-same co-condition — no baseline to measure growth against, so both rows read
-`SPILL` here once the adapter as a whole is saturated with shared residency
-above the floor, even though `firefox.exe`'s own 25 MiB is the benign
-baseline, not its own contribution to the spill. It's a glance-level triage
-signal, not a per-process verdict; see
+same co-condition — no baseline to measure growth against, so it applies an
+absolute floor instead: the adapter is spilling once it is saturated with
+shared residency above 256 MiB. Since v0.2.13 that device verdict is stated
+once, on the summary line, rather than repeated on every row: `python.exe`,
+whose own 2.9 GiB of shared residency clears the same 256 MiB floor, reads
+`PAGED`; `firefox.exe`, whose 25 MiB is the benign baseline, reads `device` —
+its device is spilling, but it is not the one being paged. `PAGED` says who
+is being paged, not who caused the pressure: the memory manager pages
+whatever it chooses. It's a glance-level triage signal, not a per-process
+verdict; see
 [the FAQ entry](../FAQ.md#why-is-the-hmn-ps-spill-column-sometimes-null-and-how-does-it-differ-from-hmn-watch)
 for the exact distinction from this walkthrough's adapter-wide report.
 

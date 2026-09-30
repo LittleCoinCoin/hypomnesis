@@ -10,6 +10,16 @@ The crate's *why* lives in [`docs/hypomnesis-brief.md`](docs/hypomnesis-brief.md
 
 ## Current state
 
+**v0.2.13** in progress. *Stop `hmn watch` from reporting a spill check it never ran, and let
+`hmn ps` say who is being paged.* An askesis dogfooding report
+([2026-09-28](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md))
+found `hmn watch`'s text summary saying `no spill observed` on Linux, where spill is not
+measurable — a bug since v0.2.6 — and asked for `hmn ps` to name the paged process, select by
+name (`--filter`, which triggered the `PsFilters` refactor), gate on "nothing matched"
+(`--exit-status`), take several `--pid`s and refuse an unlistable `--device`. A new
+`process_exists` backs a warning for a nonexistent explicit PID. Detailed plan:
+[`docs/roadmap-v0.2.13.md`](docs/roadmap-v0.2.13.md).
+
 **v0.2.12** shipped 2026-09-26. *Clean the base first, then teach `hmn watch` to
 follow a process by name.* Part 1 — done 2026-09-26 — remediated the nine items of a duplicate-code audit
 ([`docs/audits/2026-09-26-duplicate-code-audit.md`](docs/audits/2026-09-26-duplicate-code-audit.md))
@@ -216,6 +226,16 @@ Items that *might* land, gated on real consumer demand:
 - **Standalone CLI reference doc** — a systematic, flag-by-flag reference for all five subcommands (root device summary, `ps`, `spill`, `watch`, `fits` since v0.2.11; ~16 flags total), generated from or kept in lockstep with `hmn --help`'s actual output so it can't drift from the real flag set, rather than hand-duplicated prose. README's "Binary (`hmn`)" section is narrative/example-driven by design and `hmn --help` is already comprehensive at runtime — this would add a browsable/linkable version, not a missing capability. Not dogfooding-driven — surfaced in conversation while checking v0.2.8's documentation completeness; gated on an adopter actually wanting one.
 - **Unified `spill_condition` core with pluggable thresholds** (surfaced by v0.2.11's second, independent post-ship code-review pass) — `fold` (backing `SpillTracker`/`hmn watch`/`hmn spill`) and `saturated_with_shared_floor` (backing `hmn ps`'s SPILL column, v0.2.11) each reimplement the two-sided spill predicate; only the dedicated-threshold arithmetic is actually shared (`default_dedicated_threshold`, also v0.2.11). A `SharedCriterion::GrowthAboveBaseline{baseline, margin} | AbsoluteFloor(bytes)` core would unify both *and* let `snapshot_is_spilling` accept the same threshold overrides `SpillTracker` already exposes (`with_dedicated_threshold` / `with_shared_growth_threshold`) — today a consumer who tunes those gets a *different* verdict from `hmn ps` for the identical adapter state, with no way to align them. Un-gated by a consumer who actually calls the override methods and needs `hmn ps` to honor them.
 - **`GpuDeviceInfo::fits(&self, size: u64) -> bool`** (surfaced by the same review) — `hmn fits`'s `size <= free_bytes` check lives only in the CLI binary (`src/bin/hmn/fits.rs`); a library consumer has no equivalent and would have to rediscover the per-backend caveats (NVML-only `reserved_bytes` netting, the `DXGI`-fallback per-process lower bound, macOS's static working-set budget) that today live only in `run_fits`'s doc comment. `format_free`'s own doc already names this exact use case ("if I load this model now, will it fit?"). Gated on a library consumer (not just `hmn` CLI users) asking for it; open design question if it ships — a bare `bool`, or also the headroom/shortfall margin `hmn fits`'s own message computes.
+- **`hmn watch` follows a wrapper PID's GPU-holding descendants** (surfaced by v0.2.13's askesis
+  report, observation 1) — a launcher holds its wrapper script's PID (`run_stages.sh`), which holds
+  no GPU memory, while its child (`canvas`) does. v0.2.13 only warns about an explicit PID that
+  names no running process, deliberately guessing nothing. The principled extension: when an
+  explicit PID exists but holds no GPU memory and has GPU-holding descendants, watch those and say
+  so (`pid=15503 holds no GPU memory; watching its descendant pid=15534 (canvas)`). Needs parent-PID
+  data in the library on three platforms (Linux `/proc/<pid>/stat`, the `th32ParentProcessID`
+  the Windows snapshot already returns, macOS `proc_pidinfo`) and a rule for several GPU-holding
+  descendants. `hmn ps --filter` already answers the launcher's question by name; gated on a
+  workload whose GPU process has no stable name.
 - ~~**`PsFilters` struct for `hmn ps`**~~ — *Done in v0.2.13*, triggered as predicted: `hmn ps --filter`, the fourth `ps` filter, was requested by askesis's spill-verdict dogfooding report, so the refactor landed first, byte-identical (`docs/roadmap-v0.2.13.md`).
 - **Text-table widths in characters, not bytes** (surfaced by v0.2.12's duplicate-code audit) — `hmn ps` / `hmn watch` tables size columns with `str::len` (bytes) but pad with `{:<w$}` (characters), so a row with a non-ASCII process name is over-padded and its later columns drift right. Kept as is in v0.2.12 at the maintainer's call, since any fix changes both commands' output; measuring in `chars()` fixes accented Latin names, display width (e.g. `unicode-width`, a new dependency) would also align East Asian wide characters. Un-gated by a user with non-ASCII process names who finds the drift in the way.
 
@@ -253,6 +273,7 @@ Items that *might* land, gated on real consumer demand:
 - [`docs/roadmap-v0.2.10.md`](docs/roadmap-v0.2.10.md) — shipped 2026-08-17. *Audited, not assumed.* A full-codebase self-audit read as a first-party dogfooding report under Principle 1: three silent-failure fixes (`hmn ps`'s 64-process `NVML` cap, `DXGI` adapter-walk abort-on-one-bad-adapter, `hmn`'s no-subcommand silent/`[]` output), a `macos-latest` CI leg closing a three-release-old blind spot (and catching two real bugs in `src/gpu/metal.rs` on its first two runs), a `publish.yml` tag/version guard, and a batch of stale-documentation corrections.
 - [`docs/roadmap-v0.2.11.md`](docs/roadmap-v0.2.11.md) — shipped 2026-09-15. *`hmn ps` learns to say "spilling" instead of making the operator infer it.* A `candle-mi` dogfooding report's four asks, in priority order: `hmn ps` SPILL column / `spilling` JSON field (`hypomnesis::snapshot_is_spilling`, honestly `null`/`?` rather than `false`/`no` when unmeasurable — a contract `hmn watch`'s own `spilling` field now shares); `hmn watch --json` `wall_clock` field (dependency-free `iso8601_utc_millis`); `hmn ps --min <SIZE>`; `hmn fits <SIZE>` headroom predicate. Two independent post-ship review passes found and fixed a further batch of issues, most notably a narrow `Some(false)`-when-unmeasurable gap in the new SPILL honesty contract and a `wall_clock`/`t_ms` skew on `watch`'s first sample.
 - [`docs/roadmap-v0.2.12.md`](docs/roadmap-v0.2.12.md) — shipped 2026-09-26. *Clean the base first, then teach `hmn watch` to follow a process by name.* Part 1 (done 2026-09-26): the nine items of the 2026-09-26 duplicate-code audit, one commit each (one `DXGI` robustness fix, eight behaviour-preserving refactors including a per-subcommand split of `src/bin/hmn.rs`), plus `PDH` error messages reworded to `CONVENTIONS.md`'s form and a mechanical consistency pass. Part 2: `hmn watch --filter` / `--min`, criterion on the header line, and a `start` record opening `--json`, from a candle-mi dogfooding report.
+- [`docs/roadmap-v0.2.13.md`](docs/roadmap-v0.2.13.md) — in progress. *Stop `hmn watch` from reporting a spill check it never ran, and let `hmn ps` say who is being paged.* The askesis spill-verdict dogfooding report: the `hmn watch` unmeasurable-summary fix; `hmn ps` `PAGED`/`device` cells and a once-stated device verdict, `--filter`, `--exit-status`, repeatable `--pid`, `--device` range errors; `process_exists`; aligned `watch` rows; `--help` reordered.
 
 Foundational documents (not per-release):
 

@@ -188,11 +188,16 @@ model / precision". Both figures are measured **residency** (`PDH`
 *grown* above its baseline" the way the co-condition above does. Its SPILL column (`spilling` in
 `--json`, since v0.2.11) instead applies the same two thresholds with the growth check replaced
 by an absolute floor: adapter dedicated-resident ≥ 85% of capacity **and** adapter
-shared-resident ≥ 256 MiB, evaluated once per device from one live sample and broadcast to every
-row on that device (the same "same value on every row" shape `hmn watch`'s own `spilling` field
-already uses). **This is not equivalent to `hmn watch`'s verdict for the same instant** — a
-workload whose own baseline shared usage already sits above 256 MiB (an unusually large staging
-heap) reads `SPILL` here and correctly `no` there once its baseline is subtracted. `null`
+shared-resident ≥ 256 MiB, evaluated once per device from one live sample. The `--json`
+`spilling` field carries that device verdict on every row of the device (the same "same value on
+every row" shape `hmn watch`'s own `spilling` field uses). Since v0.2.13 the text table does not
+repeat it as `SPILL` on every row: the process being paged — its own SHARED ≥ the same 256 MiB —
+reads `PAGED`, the device's other processes read `device` (`paged` and `shared_share` in
+`--json`), and the summary line states the verdict once. `PAGED` names who is being paged, not
+who caused the pressure. **This is not equivalent to `hmn watch`'s verdict for the same
+instant** — a workload whose own baseline shared usage already sits above 256 MiB (an unusually
+large staging heap) reads as spilling here and correctly `no` there once its baseline is
+subtracted. `null`
 (`?` in the text table) means spill isn't measurable at all — non-Windows, built without the
 `pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, or the adapter's dedicated
 capacity itself coming back unassessable — and is never collapsed into `false`/`no`, so a script

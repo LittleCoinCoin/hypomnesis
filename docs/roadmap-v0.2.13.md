@@ -90,13 +90,52 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
 | 9 | `hmn watch` warns about a nonexistent explicit PID (observation 1) | feature | ✅ |
 | 10 | `hmn watch` rows aligned under the header (observation 2) | fix | ✅ |
 | 11 | Limitations after the command list in `hmn --help` (observation 3) | docs | ✅ |
-| 12 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ⬜ |
+| 12 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ✅ |
 
 ---
 
+## Deviations from the plan, and why
+
+- **`--device` errors on any failed listing of the named device, not only out of range.** The
+  report asked for the range case. A named device whose query fails for another reason produced the
+  same empty table and exit `0`, the same "idle card" misreading; `hmn fits` already exits `2` on
+  any `device_info` error. Without `--device`, a failing device is still skipped.
+- **`matches_any` moved with `--filter` (item 3), not with the refactor (item 2),** and gained a
+  sibling, `ps::filterable_name`: the one definition of "a name a pattern can match", which
+  `watch::matchable_name` now builds on, so the two filters cannot disagree.
+- **The `entry()` test fixture moved to `test_support.rs`** in item 2, once `ps.rs`'s tests needed
+  it as well as `watch.rs`'s.
+- **Docs landed with their features.** Each item updated the README, FAQ, tutorial, `--help` and
+  `CHANGELOG.md` text it made stale; item 12 covers what remained (the README usage block and
+  summary example, the FAQ's `hmn ps` SPILL entry, the spill tutorial's Step 3, `ROADMAP.md`).
+- **`CHANGELOG.md`'s `[Unreleased]` sections now follow Keep a Changelog's order** (Added, Changed,
+  Fixed, Security); the Security section was first.
+
 ## Verification
 
-To be filled in as items land.
+- Every commit passed the CI gate set on Windows: `fmt`, the two `--no-default-features` checks,
+  clippy (default and all features, `-D warnings`), the tests, and `cargo doc` with `-D warnings`,
+  also with `--document-private-items`. Tests: 324 → 355 passed.
+- The macOS arm of `process_exists` and the Linux arm were checked with clippy for
+  `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`, default and all features; the macOS one
+  found an item-after-statement lint, fixed before commit.
+- Tests pinned against the fix, not just alongside it: the `watch` summary test asserts the absence
+  of `no spill observed` and `peak dedicated` for a non-measurable report; both alignment tests
+  fail with the minimum widths removed.
+- A new, non-ignored `tests/cli_ps.rs` runs the compiled binary: `--device 99` exits `2` with its
+  reason and `--exit-status` exits `1` on an empty listing, on any machine, GPU or not.
+- Live on the RTX 5060 Ti: `--filter DWM --filter code` lists both, case-insensitively, and echoes
+  them; a blank pattern is rejected (exit `2`); `--pid A --pid B --pid A` lists two and echoes
+  each once; `--device 3` exits `2` with `device index 3 out of range (have 1 devices)`;
+  `--exit-status` exits `0` with a match and `1` without. With `tools/spillforge` forcing a real
+  spill, `spillforge.exe` at 423 MiB shared read `PAGED`, every other row `device`; `--json`
+  carried `"paged":true,"shared_share":0.9377`; the summary read `device 0 spilling: 1.0 GiB free,
+  438 MiB shared, 1 process paged`. `hmn watch 999999 <own PID>` warned about 999999 only.
+  `hmn watch --top 3` rows lined up under the header. Sorted, the old and new `hmn --help` are
+  line-for-line equal, with the command list now above the Limitations.
+- **Not seen live:** the Linux `hmn watch` summary. Under WSL2, `NVML` lists no processes, so
+  `hmn watch` exits `2` before any summary; the fix is covered by the unit test on a
+  non-measurable report, the exact shape a Linux run produces.
 
 ---
 
