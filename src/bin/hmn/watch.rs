@@ -469,13 +469,28 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
 
 /// Format the closing summary in text mode: the adapter-level report
 /// (via [`format_spill_report_with_prefix`] under the `hmn watch`
-/// prefix) or, when spill tracking was unavailable for this run, a
-/// one-line notice — followed either way by the per-PID block.
+/// prefix) when spill was measurable, else a one-line notice — followed
+/// either way by the per-PID block.
+///
+/// Two notices, because there are two ways not to measure: no tracker
+/// at all (construction failed), or a tracker that exists but cannot
+/// measure (`SpillReport::measurable` false — every Linux and macOS
+/// run, and Windows without a usable adapter counter set). The second
+/// must not reach [`format_spill_report_with_prefix`]: its all-zeros
+/// report would print `peak dedicated 0 MiB` and `no spill observed`,
+/// a measured-looking negative. It says what `hmn spill` says instead.
 fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSummary]) -> String {
-    let mut out = report.map_or_else(
-        || "hmn watch: spill tracking unavailable for this run; per-PID VRAM below\n".to_owned(),
-        |r| format_spill_report_with_prefix("hmn watch", r),
-    );
+    let mut out = match report {
+        Some(r) if r.measurable => format_spill_report_with_prefix("hmn watch", r),
+        // BORROW: explicit to_owned — the summary is built as an owned String.
+        Some(_) => {
+            "hmn watch: spill not measurable on this platform; per-PID VRAM below\n".to_owned()
+        }
+        // BORROW: explicit to_owned — the summary is built as an owned String.
+        None => {
+            "hmn watch: spill tracking unavailable for this run; per-PID VRAM below\n".to_owned()
+        }
+    };
     out.push_str(&format_watch_per_pid_block(per_pid));
     out
 }
@@ -2134,11 +2149,32 @@ mod tests {
     }
 
     #[test]
-    fn format_watch_summary_text_unmeasurable_notes_and_still_shows_per_pid() {
+    fn format_watch_summary_text_no_tracker_notes_and_still_shows_per_pid() {
         let s = format_watch_summary_text(None, &[pid_summary(1, Some("a.exe"), 0, 0, 0, 0)]);
         assert!(s.contains("spill tracking unavailable"));
         assert!(s.contains("per-PID"));
         assert!(s.contains('1'));
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn format_watch_summary_text_unmeasurable_report_says_so_not_no_spill() {
+        // The shape every Linux and macOS run produces: a tracker exists,
+        // but its report is the all-zeros `measurable: false` one. It must
+        // not render as a measured negative (the v0.2.6–v0.2.12 bug).
+        let report = SpillReport::builder().build();
+        assert!(!report.measurable);
+        let s = format_watch_summary_text(
+            Some(&report),
+            &[pid_summary(15534, Some("canvas"), 0, 0, 0, 0)],
+        );
+        assert!(s.starts_with(
+            "hmn watch: spill not measurable on this platform; per-PID VRAM below\n\
+             hmn watch: per-PID  PID"
+        ));
+        assert!(s.contains("15534"));
+        assert!(!s.contains("no spill observed"));
+        assert!(!s.contains("peak dedicated"));
     }
 
     #[cfg(feature = "test-helpers")]

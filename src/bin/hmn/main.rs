@@ -287,7 +287,9 @@ enum Commands {
     /// readings.
     ///
     /// Runs until `--duration` elapses or Ctrl+C, printing a closing
-    /// summary (adapter-level `SpillReport` plus per-PID peak/baseline) and
+    /// summary (adapter-level `SpillReport` plus per-PID peak/baseline;
+    /// where spill is not measurable, a "spill not measurable on this
+    /// platform" line in place of the report) and
     /// exiting `0` if spill was never observed, `1` if it was at least
     /// once, `2` on a hard error (bad device, nothing to auto-select, or
     /// `--follow-new` / `--filter` / `--min` combined with explicit

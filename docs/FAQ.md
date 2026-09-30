@@ -231,7 +231,9 @@ and the other platforms honestly cannot exhibit or measure it:
 `SpillTracker` still compiles and constructs everywhere (portable consumers
 need no `cfg`), but `is_spill_measurable()` returns `false`, `observe()` is a
 no-op, and `hmn spill` runs your command then prints *"spill not measurable on
-this platform"* instead of a misleading all-zeros report. In `--json` output,
+this platform"* instead of a misleading all-zeros report. `hmn watch`'s closing
+summary says the same since v0.2.13 (before, it printed the all-zeros report,
+ending in `no spill observed`), and its SPILL column shows `?`. In `--json` output,
 check `measurable` before trusting `spilled: false`.
 
 ## What does a `?` in the NAME column mean — and when do I need elevation?

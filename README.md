@@ -373,7 +373,11 @@ Runs until `--duration` elapses or Ctrl+C, then prints a closing summary
 (the same `SpillReport` shape as `hmn spill`, plus a per-PID peak/baseline
 table) and exits **`0`** if spill was never observed, **`1`** if it was at
 least once, **`2`** on a hard error — designed for a watchdog script to check
-directly:
+directly. Where spill is not measurable (Linux, macOS), the summary says
+`spill not measurable on this platform` in place of the report (since
+v0.2.13; earlier versions printed an all-zeros report ending in `no spill
+observed`) and the exit code is `0`, so a script there should read
+`measurable` from `--json` before taking `0` as "no spill":
 
 ```sh
 hmn watch 21844 --duration 5m
