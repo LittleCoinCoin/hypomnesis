@@ -6,7 +6,9 @@
 use std::fmt::Write as _;
 
 use clap::ValueEnum;
-use hypomnesis::{Result, device_count, device_info, gpu_processes, snapshot_is_spilling};
+use hypomnesis::{
+    GpuProcessEntry, Result, device_count, device_info, gpu_processes, snapshot_is_spilling,
+};
 
 use crate::format::{
     Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
@@ -101,29 +103,74 @@ pub const fn ps_row_comparator(key: SortKey) -> impl Fn(&PsRow, &PsRow) -> std::
     }
 }
 
+/// The filters `hmn ps` applies, as one value: what `run_ps` lists and
+/// what the summary line's ` matching …` clause says was applied, so
+/// the two cannot disagree. Binary-internal, not a library type.
+#[derive(Debug, Clone, Default)]
+pub struct PsFilters {
+    /// `--pid`: list only this PID. `None` lists every PID.
+    pub pid: Option<u32>,
+    /// `--device`: list only this GPU index (`NVML`-canonical). `None`
+    /// lists every device `device_count` reports. Chooses which devices
+    /// are enumerated rather than testing rows, so [`Self::keeps`] does
+    /// not look at it.
+    pub device: Option<u32>,
+    /// `--min`: list only processes whose total footprint
+    /// ([`footprint_bytes`]) is at least this many bytes. `None` applies
+    /// no floor.
+    pub min_bytes: Option<u64>,
+}
+
+impl PsFilters {
+    /// Whether a process on an already-selected device passes the
+    /// row-level filters (`--pid`, `--min`).
+    #[must_use]
+    pub fn keeps(&self, entry: &GpuProcessEntry) -> bool {
+        self.pid.is_none_or(|want| entry.pid == want)
+            && self
+                .min_bytes
+                .is_none_or(|min| footprint_bytes(entry.used_bytes, entry.shared_used_bytes) >= min)
+    }
+
+    /// The summary line's filter clauses (`pid=N`, `device=M`,
+    /// `min=X unit`), in that order, one per active filter; empty when
+    /// no filter is active.
+    #[must_use]
+    fn clauses(&self) -> Vec<String> {
+        let mut clauses = Vec::new();
+        if let Some(p) = self.pid {
+            clauses.push(format!("pid={p}"));
+        }
+        if let Some(d) = self.device {
+            clauses.push(format!("device={d}"));
+        }
+        if let Some(m) = self.min_bytes {
+            // format_vram_precise, not format_vram: pid=/device= echo exact
+            // values, and format_vram's MiB-below-1-GiB rounding would
+            // print a real sub-MiB --min as "0 MiB" — indistinguishable
+            // from the documented --min 0 no-op.
+            clauses.push(format!("min={}", format_vram_precise(m)));
+        }
+        clauses
+    }
+}
+
 /// Run the `ps` subcommand: collect process rows for the selected
 /// device(s) — sampling one live adapter-wide spill check per device
-/// along the way (see [`snapshot_is_spilling`]) — apply the `--pid` /
-/// `--min` filters, sort per `--sort`, then emit either a text table
-/// or JSON.
+/// along the way (see [`snapshot_is_spilling`]) — apply `filters`, sort
+/// per `--sort`, then emit either a text table or JSON.
 //
 // Returns `Result<()>` for symmetry with `run_summary` so `main` can
 // dispatch through one match arm. The body never produces an `Err` (per-device
 // failures are swallowed via `continue` so one broken device doesn't kill the
 // whole listing); the lint is allowed for that reason.
 #[allow(clippy::unnecessary_wraps)]
-pub fn run_ps(
-    pid_filter: Option<u32>,
-    device_filter: Option<u32>,
-    min_filter: Option<u64>,
-    sort: SortKey,
-    json: bool,
-) -> Result<()> {
+pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
     // device_count returning Err here means no enumeration backend is
     // enabled / every backend failed; treat as zero NVIDIA devices and
     // let the empty Vec fall through to the formatter (which prints
     // a header-only table or `[]`).
-    let device_indices: Vec<u32> = device_filter.map_or_else(
+    let device_indices: Vec<u32> = filters.device.map_or_else(
         || (0..device_count().unwrap_or(0)).collect(),
         |idx| vec![idx],
     );
@@ -158,17 +205,7 @@ pub fn run_ps(
         let Ok(entries) = gpu_processes(idx) else {
             continue;
         };
-        for entry in entries {
-            if let Some(want) = pid_filter
-                && entry.pid != want
-            {
-                continue;
-            }
-            if let Some(min) = min_filter
-                && footprint_bytes(entry.used_bytes, entry.shared_used_bytes) < min
-            {
-                continue;
-            }
+        for entry in entries.into_iter().filter(|e| filters.keeps(e)) {
             rows.push(PsRow {
                 pid: entry.pid,
                 name: entry.name,
@@ -204,10 +241,7 @@ pub fn run_ps(
     // Always printed, even when rows is non-empty, so the message is a
     // consistent confirmation rather than an error indicator. Redirect
     // 2>/dev/null to suppress.
-    eprintln!(
-        "hmn: {}",
-        format_ps_summary(&rows, pid_filter, device_filter, min_filter)
-    );
+    eprintln!("hmn: {}", format_ps_summary(&rows, filters));
     Ok(())
 }
 
@@ -217,8 +251,9 @@ pub fn run_ps(
 /// Two appendices after the noun, each elided when not applicable:
 ///
 /// - **Filter clause** (` matching pid=N device=M min=X unit`):
-///   appended only when at least one filter is active. Supports any
-///   combination of `--pid`, `--device`, and `--min` (echoed via
+///   appended only when at least one filter is active, as
+///   [`PsFilters::clauses`] words it. Supports any combination of
+///   `--pid`, `--device`, and `--min` (echoed via
 ///   [`format_vram_precise`], not [`format_vram`], so a sub-MiB or
 ///   otherwise-imprecise `--min` value is never misreported).
 /// - **Committed-total parenthetical** (` (X.Y unit committed total)`,
@@ -262,12 +297,7 @@ pub fn run_ps(
 /// "compute process" / "compute processes") because on the `PDH`
 /// Windows path the list includes every GPU memory holder
 /// (compositor, browsers, games, compute), not just `CUDA` contexts.
-fn format_ps_summary(
-    rows: &[PsRow],
-    pid_filter: Option<u32>,
-    device_filter: Option<u32>,
-    min_filter: Option<u64>,
-) -> String {
+fn format_ps_summary(rows: &[PsRow], filters: &PsFilters) -> String {
     let count = rows.len();
     let protected = rows
         .iter()
@@ -287,23 +317,7 @@ fn format_ps_summary(
 
     let mut out = format!("{count} {noun} found");
 
-    // Vec rather than a fixed-arity match: three independent optional
-    // filters compose more clearly as "push what's present, join with
-    // spaces" than as an 8-arm match on a 3-tuple.
-    let mut clauses: Vec<String> = Vec::new();
-    if let Some(p) = pid_filter {
-        clauses.push(format!("pid={p}"));
-    }
-    if let Some(d) = device_filter {
-        clauses.push(format!("device={d}"));
-    }
-    if let Some(m) = min_filter {
-        // format_vram_precise, not format_vram: pid=/device= echo exact
-        // values, and format_vram's MiB-below-1-GiB rounding would
-        // print a real sub-MiB --min as "0 MiB" — indistinguishable
-        // from the documented --min 0 no-op.
-        clauses.push(format!("min={}", format_vram_precise(m)));
-    }
+    let clauses = filters.clauses();
     if !clauses.is_empty() {
         let _ = write!(out, " matching {}", clauses.join(" "));
     }
@@ -383,6 +397,8 @@ fn format_ps_json(rows: &[PsRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-helpers")]
+    use crate::test_support::entry;
     use crate::test_support::row;
 
     /// Like [`row`] but with a non-zero `shared_used_bytes` — for the
@@ -411,6 +427,40 @@ mod tests {
             device_name: None,
             spilling,
         }
+    }
+
+    // --- PsFilters ---
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn ps_filters_default_keeps_everything() {
+        let f = PsFilters::default();
+        assert!(f.keeps(&entry(1, Some("a.exe"), 0, 0)));
+        assert!(f.keeps(&entry(2, None, 8 << 30, 1 << 30)));
+        assert!(f.clauses().is_empty());
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn ps_filters_pid_and_min_both_apply() {
+        const MIB: u64 = 1024 * 1024;
+        let f = PsFilters {
+            pid: Some(7),
+            device: Some(0),
+            min_bytes: Some(100 * MIB),
+        };
+        // The footprint is used + shared, as `--min` documents.
+        assert!(f.keeps(&entry(7, Some("a.exe"), 60 * MIB, 40 * MIB)));
+        assert!(!f.keeps(&entry(7, Some("a.exe"), 60 * MIB, 39 * MIB)));
+        assert!(!f.keeps(&entry(8, Some("a.exe"), 200 * MIB, 0)));
+        // `device` selects devices, not rows: it never rejects an entry.
+        assert!(
+            PsFilters {
+                device: Some(3),
+                ..PsFilters::default()
+            }
+            .keeps(&entry(1, None, 0, 0))
+        );
     }
 
     // --- format_ps_table ---
@@ -584,10 +634,19 @@ mod tests {
         (0..n).map(|i| row(2000 + i, None, 0, 0, None)).collect()
     }
 
+    /// The `--pid` / `--device` / `--min` filters as one [`PsFilters`].
+    fn filters(pid: Option<u32>, device: Option<u32>, min_bytes: Option<u64>) -> PsFilters {
+        PsFilters {
+            pid,
+            device,
+            min_bytes,
+        }
+    }
+
     #[test]
     fn format_ps_summary_zero_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), None, None, None),
+            format_ps_summary(&unprotected_rows(0), &filters(None, None, None)),
             "0 GPU processes found."
         );
     }
@@ -598,7 +657,7 @@ mod tests {
         // get a committed-total parenthetical (the figure is 0 MiB —
         // honest, even when uninteresting).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), None, None, None),
+            format_ps_summary(&unprotected_rows(1), &filters(None, None, None)),
             "1 GPU process found (0 MiB committed total)."
         );
     }
@@ -606,7 +665,7 @@ mod tests {
     #[test]
     fn format_ps_summary_many_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(7), None, None, None),
+            format_ps_summary(&unprotected_rows(7), &filters(None, None, None)),
             "7 GPU processes found (0 MiB committed total)."
         );
     }
@@ -616,7 +675,7 @@ mod tests {
         // Zero rows → no parenthetical at all (committed-total
         // elides; the filter clause still appears).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), Some(12345), None, None),
+            format_ps_summary(&unprotected_rows(0), &filters(Some(12345), None, None)),
             "0 GPU processes found matching pid=12345."
         );
     }
@@ -624,7 +683,7 @@ mod tests {
     #[test]
     fn format_ps_summary_with_device_filter() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(2), None, Some(0), None),
+            format_ps_summary(&unprotected_rows(2), &filters(None, Some(0), None)),
             "2 GPU processes found matching device=0 (0 MiB committed total)."
         );
     }
@@ -632,7 +691,7 @@ mod tests {
     #[test]
     fn format_ps_summary_with_both_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), Some(99), Some(1), None),
+            format_ps_summary(&unprotected_rows(1), &filters(Some(99), Some(1), None)),
             "1 GPU process found matching pid=99 device=1 (0 MiB committed total)."
         );
     }
@@ -640,7 +699,10 @@ mod tests {
     #[test]
     fn format_ps_summary_with_min_filter() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), None, None, Some(50 * 1024 * 1024)),
+            format_ps_summary(
+                &unprotected_rows(0),
+                &filters(None, None, Some(50 * 1024 * 1024))
+            ),
             "0 GPU processes found matching min=50 MiB."
         );
     }
@@ -651,7 +713,7 @@ mod tests {
         // format_vram, so a genuine 512 KiB filter read back as
         // "min=0 MiB" — indistinguishable from the documented --min 0
         // no-op, even though rows were actually being hidden.
-        let s = format_ps_summary(&unprotected_rows(0), None, None, Some(512 * 1024));
+        let s = format_ps_summary(&unprotected_rows(0), &filters(None, None, Some(512 * 1024)));
         assert_eq!(s, "0 GPU processes found matching min=512 KiB.");
     }
 
@@ -660,9 +722,7 @@ mod tests {
         assert_eq!(
             format_ps_summary(
                 &unprotected_rows(1),
-                Some(99),
-                Some(1),
-                Some(50 * 1024 * 1024)
+                &filters(Some(99), Some(1), Some(50 * 1024 * 1024))
             ),
             "1 GPU process found matching pid=99 device=1 min=50 MiB (0 MiB committed total)."
         );
@@ -681,7 +741,7 @@ mod tests {
             row(1003, Some("c.exe"), FOUR_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (12.0 GiB committed total)."
         );
     }
@@ -696,7 +756,7 @@ mod tests {
             row(1002, Some("b.exe"), QUARTER_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "2 GPU processes found (512 MiB committed total)."
         );
     }
@@ -708,7 +768,7 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -718,7 +778,7 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -727,7 +787,7 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -737,7 +797,7 @@ mod tests {
         // No protected rows → no `M protected …` clause, but the
         // committed-total parenthetical still appears.
         assert_eq!(
-            format_ps_summary(&unprotected_rows(5), None, None, None),
+            format_ps_summary(&unprotected_rows(5), &filters(None, None, None)),
             "5 GPU processes found (0 MiB committed total)."
         );
     }
@@ -747,7 +807,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, Some(42), Some(0), None),
+            format_ps_summary(&rows, &filters(Some(42), Some(0), None)),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -761,7 +821,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -778,7 +838,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -792,7 +852,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3001, Some("[exited]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -805,7 +865,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(4, Some("[kernel]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, None, None, None),
+            format_ps_summary(&rows, &filters(None, None, None)),
             "3 GPU processes found (0 MiB committed total)."
         );
     }

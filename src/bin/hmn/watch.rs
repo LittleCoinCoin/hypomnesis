@@ -1133,7 +1133,7 @@ pub fn run_watch(
 mod tests {
     use super::*;
     #[cfg(feature = "test-helpers")]
-    use crate::test_support::spilling_report;
+    use crate::test_support::{entry, spilling_report};
     use crate::test_support::{pid_summary, row};
 
     // --- format_delta ---
@@ -1392,21 +1392,6 @@ mod tests {
     }
 
     // --- process_sample ---
-
-    #[cfg(feature = "test-helpers")]
-    fn entry(
-        pid: u32,
-        name: Option<&str>,
-        used_bytes: u64,
-        shared_used_bytes: u64,
-    ) -> GpuProcessEntry {
-        GpuProcessEntry::builder()
-            .pid(pid)
-            .name(name.map(str::to_owned))
-            .used_bytes(used_bytes)
-            .shared_used_bytes(shared_used_bytes)
-            .build()
-    }
 
     #[cfg(feature = "test-helpers")]
     #[test]

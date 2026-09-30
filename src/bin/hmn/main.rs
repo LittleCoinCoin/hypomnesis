@@ -54,7 +54,7 @@ use clap::{Parser, Subcommand};
 
 use crate::fits::run_fits;
 use crate::format::{parse_duration, parse_filter_pattern, parse_size_bytes};
-use crate::ps::{SortKey, run_ps};
+use crate::ps::{PsFilters, SortKey, run_ps};
 use crate::spill::run_spill;
 use crate::summary::run_summary;
 use crate::watch::{Selection, run_watch};
@@ -422,7 +422,15 @@ fn main() -> std::process::ExitCode {
             min,
             sort,
             json,
-        }) => run_ps(pid, device, min, sort, json),
+        }) => run_ps(
+            &PsFilters {
+                pid,
+                device,
+                min_bytes: min,
+            },
+            sort,
+            json,
+        ),
         // `spill` bypasses the Ok/Err fold below: its exit code is the
         // wrapped command's, passed through — not hmn's own
         // success/failure.

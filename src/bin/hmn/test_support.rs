@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 #[cfg(feature = "test-helpers")]
-use hypomnesis::SpillReport;
+use hypomnesis::{GpuProcessEntry, SpillReport};
 
 use crate::ps::PsRow;
 use crate::watch::WatchPidSummary;
@@ -31,6 +31,25 @@ pub fn row(
         device_name: device_name.map(str::to_owned),
         spilling: None,
     }
+}
+
+/// A library-side process entry, as `gpu_processes` returns it — for
+/// `hmn watch`'s sampling and selection and `hmn ps`'s row filters.
+/// Built through the `test-helpers` builder: `GpuProcessEntry` is
+/// `#[non_exhaustive]`.
+#[cfg(feature = "test-helpers")]
+pub fn entry(
+    pid: u32,
+    name: Option<&str>,
+    used_bytes: u64,
+    shared_used_bytes: u64,
+) -> GpuProcessEntry {
+    GpuProcessEntry::builder()
+        .pid(pid)
+        .name(name.map(str::to_owned))
+        .used_bytes(used_bytes)
+        .shared_used_bytes(shared_used_bytes)
+        .build()
 }
 
 /// A measurable report with two spill episodes (one closed, one still
