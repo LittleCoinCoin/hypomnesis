@@ -238,13 +238,16 @@ pub fn matches_any(name: &str, patterns: &[String]) -> bool {
 /// per `--sort`, then emit either a text table or JSON.
 ///
 /// Returns the exit code, bypassing `main`'s `Ok`/`Err` fold like
-/// `run_fits` and `run_watch`: `0` normally, `2` when a device named by
+/// `run_fits` and `run_watch`: `0` normally; `1` under `exit_status`
+/// (`--exit-status`) when no process is listed, so `hmn ps --filter
+/// canvas --exit-status` is a one-line "is my job on the GPU?" gate, as
+/// `pgrep` is for processes; `2` when a device named by
 /// `--device` cannot be listed — out of range (`device index 3 out of
 /// range (have 1 devices)`, the library's own bounds check) or failing
 /// outright. Without `--device`, a device that fails is skipped so one
 /// broken device does not kill the whole listing; with it, the user asked
 /// for that device alone, and an empty table would read as an idle card.
-pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> ExitCode {
+pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool) -> ExitCode {
     // device_count returning Err here means no enumeration backend is
     // enabled / every backend failed; treat as zero NVIDIA devices and
     // let the empty Vec fall through to the formatter (which prints
@@ -337,7 +340,11 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> ExitCode {
     // consistent confirmation rather than an error indicator. Redirect
     // 2>/dev/null to suppress.
     eprintln!("hmn: {}", format_ps_summary(&rows, filters, unnamed));
-    ExitCode::SUCCESS
+    if exit_status && rows.is_empty() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:

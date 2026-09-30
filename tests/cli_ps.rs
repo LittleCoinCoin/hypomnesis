@@ -40,3 +40,14 @@ fn ps_device_out_of_range_exits_2_with_the_reason() {
         "stderr: {stderr}"
     );
 }
+
+/// `--exit-status` makes "nothing listed" exit `1`, as `pgrep` does;
+/// without it the same listing exits `0`. No process has PID `u32::MAX`,
+/// and on a machine with no GPU source nothing is listed at all.
+#[test]
+fn ps_exit_status_is_1_when_nothing_is_listed_and_opt_in() {
+    let (code, stderr) = hmn(&["ps", "--pid", "4294967295", "--exit-status"]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    let (code, stderr) = hmn(&["ps", "--pid", "4294967295"]);
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+}

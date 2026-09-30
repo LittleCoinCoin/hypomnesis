@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Repeated PIDs are dropped, and the summary echoes each once (`matching pid=15503,15534`). A
   comma-separated `--pid 1,2` is still rejected. Same report, request 6.
 
+- **`hmn ps --exit-status`** (`src/bin/hmn/ps.rs`, `main.rs`) — opt-in: exit `1` when no process
+  is listed, `0` when at least one is, as `pgrep` does. `hmn ps --filter canvas --exit-status ||
+  echo "not on the GPU"` is then a one-line gate, as `hmn fits` already is for headroom. The
+  default is unchanged: `hmn ps` exits `0` whether or not anything matched. Same report,
+  request 4.
+
 ### Changed
 
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`

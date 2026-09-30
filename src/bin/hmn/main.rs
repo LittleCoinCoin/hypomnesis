@@ -238,6 +238,14 @@ enum Commands {
         /// follows `--sort`.
         #[arg(long)]
         json: bool,
+        /// Exit `1` when no process is listed, `0` when at least one is —
+        /// as `pgrep` does — so `hmn ps --filter canvas --exit-status`
+        /// answers "is my job on the GPU?" as a one-line gate. Off by
+        /// default: without it, `hmn ps` exits `0` whether or not anything
+        /// matched. A device named by `--device` that cannot be listed is
+        /// still exit `2`.
+        #[arg(long)]
+        exit_status: bool,
     },
     /// Run a command while sampling WDDM spill state; print a
     /// `SpillReport` to stderr when it exits (stdout stays the
@@ -439,7 +447,15 @@ fn main() -> std::process::ExitCode {
             filters,
             sort,
             json,
-        }) => return run_ps(&PsFilters::new(&pids, device, min, filters), sort, json),
+            exit_status,
+        }) => {
+            return run_ps(
+                &PsFilters::new(&pids, device, min, filters),
+                sort,
+                json,
+                exit_status,
+            );
+        }
         // `spill` bypasses the Ok/Err fold below: its exit code is the
         // wrapped command's, passed through — not hmn's own
         // success/failure.
