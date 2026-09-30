@@ -16,7 +16,7 @@ use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
     json_string, json_string_or_null, json_value_or_null, spill_cell,
 };
-use crate::ps::{PsRow, SortKey, footprint_bytes, ps_row_comparator};
+use crate::ps::{PsRow, SortKey, filterable_name, footprint_bytes, matches_any, ps_row_comparator};
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
 
 /// Minimum unresolved-PID cumulative growth (bytes, either committed or
@@ -817,11 +817,11 @@ fn format_watch_start_json(
 }
 
 /// The name `--filter` judges a row by: its current name if that is a
-/// genuinely resolved one, else `sticky` — the name this PID last resolved
-/// to in an earlier sample, so a followed process whose name flickers to
+/// genuinely resolved one ([`filterable_name`], the rule `hmn ps --filter`
+/// uses too), else `sticky` — the name this PID last resolved to in an
+/// earlier sample, so a followed process whose name flickers to
 /// `[protected]` for one interval is not evicted by it. `None` when
-/// neither is available. Besides what [`resolved_name`] already excludes,
-/// the `nvidia-smi` fallback's literal `?` is not a name either.
+/// neither is available.
 ///
 /// Best-effort, like `hmn watch`'s PID-reuse handling generally: if a
 /// followed process exits and the OS reuses its PID for a process whose
@@ -830,18 +830,7 @@ fn format_watch_start_json(
 /// judged by that name, as it should be.
 #[must_use]
 fn matchable_name<'a>(current: Option<&'a str>, sticky: Option<&'a str>) -> Option<&'a str> {
-    let real = |n: &&str| *n != "?";
-    resolved_name(current)
-        .filter(real)
-        .or_else(|| resolved_name(sticky).filter(real))
-}
-
-/// Whether `name` contains any of `patterns`, ignoring case (`--filter`'s
-/// matching rule).
-#[must_use]
-fn matches_any(name: &str, patterns: &[String]) -> bool {
-    let name = name.to_lowercase();
-    patterns.iter().any(|p| name.contains(&p.to_lowercase()))
+    filterable_name(current).or_else(|| filterable_name(sticky))
 }
 
 /// The one-shot stderr notices for PIDs in `unmatchable` that this watch
@@ -1935,14 +1924,6 @@ mod tests {
         assert_eq!(matchable_name(None, None), None);
         // `[kernel]` is a stable, genuine name (PID 4), as for PID reuse.
         assert_eq!(matchable_name(Some("[kernel]"), None), Some("[kernel]"));
-    }
-
-    #[test]
-    fn matches_any_is_a_case_insensitive_substring_or() {
-        let pats = ["Figure13".to_owned(), "python".to_owned()];
-        assert!(matches_any("figure13_newline_patch.exe", &pats));
-        assert!(matches_any("PYTHON.EXE", &pats));
-        assert!(!matches_any("dwm.exe", &pats));
     }
 
     #[test]

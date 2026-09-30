@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`hmn ps --filter <PATTERN>` — list processes by name** (`src/bin/hmn/ps.rs`, `main.rs`) —
+  keeps only processes whose name contains the pattern, ignoring case, with exactly
+  `hmn watch --filter`'s rule (both now call `ps::matches_any` and `ps::filterable_name`).
+  Repeatable: a name matching any pattern qualifies. The patterns are echoed on the summary line
+  (`1 GPU process found matching filter="canvas" (16.5 GiB committed total).`), and a process
+  whose name cannot be resolved (`?`, `[protected]`, `[exited]`) is counted there
+  (`2 unnamed not matched`) rather than dropped silently. A launcher that holds a wrapper
+  script's PID can now ask "is my job on the GPU?" without a `pgrep` in front of `--pid`. From
+  askesis's
+  [2026-09-28 dogfooding report](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md),
+  request 3.
+
+### Changed
+
+- **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`
+  refactor gated on a fourth `ps` filter being requested, which `--filter` is. It decides which
+  rows are listed and words the summary's `matching …` clause, so the two cannot disagree.
+  Byte-identical output.
+
+### Fixed
+
+- **`hmn watch` no longer reports a spill check it could not run** (`src/bin/hmn/watch.rs`) —
+  where spill is not measurable (every Linux and macOS run, and Windows without a usable adapter
+  counter set), the text summary printed the all-zeros spill report: `peak dedicated 0 MiB` and
+  `episodes 0 — no spill observed`, a measured-looking negative, while the `--json` summary said
+  `"measurable": false`. It now prints `hmn watch: spill not measurable on this platform; per-PID
+  VRAM below`, as `hmn spill` already did, then the per-PID table. Present since v0.2.6: the
+  formatter checked only whether a tracker existed, never whether it could measure, and the test
+  named for the unmeasurable case covered only the no-tracker one. The exit code is unchanged
+  (`0` when no spill was observed, measurable or not). From askesis's
+  [2026-09-28 dogfooding report](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md),
+  request 1.
+
 ### Security
 
 - **Release pipeline hardened against registry-token theft**, the root cause
@@ -25,20 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packages with a read-only token, and `publish` holds `id-token: write` and
   runs `cargo publish --no-verify`, which compiles nothing. Every cargo command
   in `publish.yml` and `ci.yml` uses `--locked`.
-
-### Fixed
-
-- **`hmn watch` no longer reports a spill check it could not run** (`src/bin/hmn/watch.rs`) —
-  where spill is not measurable (every Linux and macOS run, and Windows without a usable adapter
-  counter set), the text summary printed the all-zeros spill report: `peak dedicated 0 MiB` and
-  `episodes 0 — no spill observed`, a measured-looking negative, while the `--json` summary said
-  `"measurable": false`. It now prints `hmn watch: spill not measurable on this platform; per-PID
-  VRAM below`, as `hmn spill` already did, then the per-PID table. Present since v0.2.6: the
-  formatter checked only whether a tracker existed, never whether it could measure, and the test
-  named for the unmeasurable case covered only the no-tracker one. The exit code is unchanged
-  (`0` when no spill was observed, measurable or not). From askesis's
-  [2026-09-28 dogfooding report](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md),
-  request 1.
 
 ## [0.2.12] - 2026-09-26
 

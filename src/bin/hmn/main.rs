@@ -203,6 +203,15 @@ enum Commands {
         /// prints. `--min 0` is a valid no-op.
         #[arg(long, value_name = "SIZE", value_parser = parse_size_bytes)]
         min: Option<u64>,
+        /// Keep only processes whose name contains PATTERN, ignoring
+        /// case (`--filter canvas` matches `canvas` and `Canvas.exe`) —
+        /// the same rule as `hmn watch --filter`. Repeatable: a name
+        /// matching any one pattern qualifies. A process whose name
+        /// cannot be resolved (`?`, `[protected]`, `[exited]`) cannot
+        /// match; the summary line counts those rather than dropping them
+        /// silently. The patterns are echoed on the summary line.
+        #[arg(long = "filter", value_name = "PATTERN", value_parser = parse_filter_pattern)]
+        filters: Vec<String>,
         /// Display order: `dedicated` ("who do I kill to free VRAM?",
         /// the default), `shared` ("who is currently being paged out?"
         /// — a symptom, not a cause; always a no-op ordering on Linux
@@ -420,6 +429,7 @@ fn main() -> std::process::ExitCode {
             pid,
             device,
             min,
+            filters,
             sort,
             json,
         }) => run_ps(
@@ -427,6 +437,7 @@ fn main() -> std::process::ExitCode {
                 pid,
                 device,
                 min_bytes: min,
+                patterns: filters,
             },
             sort,
             json,
@@ -553,6 +564,26 @@ mod tests {
     #[test]
     fn ps_args_min_rejects_bad_size() {
         assert!(Cli::try_parse_from(["hmn", "ps", "--min", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn ps_args_filter_is_repeatable_and_defaults_to_none() {
+        let cli =
+            Cli::try_parse_from(["hmn", "ps", "--filter", "canvas", "--filter", "Python"]).unwrap();
+        let Some(Commands::Ps { filters, .. }) = cli.command else {
+            panic!("expected Ps subcommand");
+        };
+        assert_eq!(filters, ["canvas", "Python"]);
+        let cli = Cli::try_parse_from(["hmn", "ps"]).unwrap();
+        let Some(Commands::Ps { filters, .. }) = cli.command else {
+            panic!("expected Ps subcommand");
+        };
+        assert!(filters.is_empty());
+    }
+
+    #[test]
+    fn ps_args_filter_rejects_blank_pattern() {
+        assert!(Cli::try_parse_from(["hmn", "ps", "--filter", " "]).is_err());
     }
 
     // --- spill argument parsing ---

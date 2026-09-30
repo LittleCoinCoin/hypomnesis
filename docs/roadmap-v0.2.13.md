@@ -81,7 +81,7 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
 |---|---|---|---|
 | 1 | `hmn watch` says "spill not measurable" instead of "no spill observed" (request 1) | **fix** | ✅ |
 | 2 | `PsFilters`: one value for `hmn ps`'s filters | refactor | ✅ |
-| 3 | `hmn ps --filter <PATTERN>` (request 3) | feature | ⬜ |
+| 3 | `hmn ps --filter <PATTERN>` (request 3) | feature | ✅ |
 | 4 | Repeatable `hmn ps --pid` (request 6) | feature | ⬜ |
 | 5 | `hmn ps --device` out of range exits `2` (request 5) | fix | ⬜ |
 | 6 | `hmn ps --exit-status` (request 4) | feature | ⬜ |

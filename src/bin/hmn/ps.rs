@@ -112,29 +112,58 @@ pub struct PsFilters {
     pub pid: Option<u32>,
     /// `--device`: list only this GPU index (`NVML`-canonical). `None`
     /// lists every device `device_count` reports. Chooses which devices
-    /// are enumerated rather than testing rows, so [`Self::keeps`] does
+    /// are enumerated rather than testing rows, so [`Self::judge`] does
     /// not look at it.
     pub device: Option<u32>,
     /// `--min`: list only processes whose total footprint
     /// ([`footprint_bytes`]) is at least this many bytes. `None` applies
     /// no floor.
     pub min_bytes: Option<u64>,
+    /// `--filter`: list only processes whose name contains one of these
+    /// patterns, ignoring case ([`matches_any`]). Empty applies no name
+    /// filter.
+    pub patterns: Vec<String>,
+}
+
+/// What [`PsFilters::judge`] decided about one process. Binary-internal
+/// dispatch enum, matched exhaustively by `run_ps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PsJudgement {
+    /// Passes every filter: listed.
+    Listed,
+    /// Rejected by a filter: not listed, not counted.
+    Filtered,
+    /// Passes `--pid` and `--min`, but has no name `--filter` can judge
+    /// ([`filterable_name`]): not listed, and counted on the summary line
+    /// so it is never dropped silently.
+    Unnamed,
 }
 
 impl PsFilters {
-    /// Whether a process on an already-selected device passes the
-    /// row-level filters (`--pid`, `--min`).
+    /// Judge a process on an already-selected device against the
+    /// row-level filters (`--pid`, `--min`, then `--filter`).
     #[must_use]
-    pub fn keeps(&self, entry: &GpuProcessEntry) -> bool {
-        self.pid.is_none_or(|want| entry.pid == want)
-            && self
-                .min_bytes
-                .is_none_or(|min| footprint_bytes(entry.used_bytes, entry.shared_used_bytes) >= min)
+    pub fn judge(&self, entry: &GpuProcessEntry) -> PsJudgement {
+        let size_and_pid = self.pid.is_none_or(|want| entry.pid == want)
+            && self.min_bytes.is_none_or(|min| {
+                footprint_bytes(entry.used_bytes, entry.shared_used_bytes) >= min
+            });
+        if !size_and_pid {
+            return PsJudgement::Filtered;
+        }
+        if self.patterns.is_empty() {
+            return PsJudgement::Listed;
+        }
+        match filterable_name(entry.name.as_deref()) {
+            Some(name) if matches_any(name, &self.patterns) => PsJudgement::Listed,
+            Some(_) => PsJudgement::Filtered,
+            None => PsJudgement::Unnamed,
+        }
     }
 
     /// The summary line's filter clauses (`pid=N`, `device=M`,
-    /// `min=X unit`), in that order, one per active filter; empty when
-    /// no filter is active.
+    /// `min=X unit`, `filter="a","b"`), in that order, one per active
+    /// filter; empty when no filter is active.
     #[must_use]
     fn clauses(&self) -> Vec<String> {
         let mut clauses = Vec::new();
@@ -151,8 +180,34 @@ impl PsFilters {
             // from the documented --min 0 no-op.
             clauses.push(format!("min={}", format_vram_precise(m)));
         }
+        if !self.patterns.is_empty() {
+            // Debug-quoted, as `hmn watch`'s header quotes them, so a
+            // pattern holding a space or a comma reads unambiguously.
+            let quoted: Vec<String> = self.patterns.iter().map(|p| format!("{p:?}")).collect();
+            clauses.push(format!("filter={}", quoted.join(",")));
+        }
         clauses
     }
+}
+
+/// The name a `--filter` pattern can be matched against: `name`, unless it
+/// is not a real name — absent, the Windows-only `[protected]` / `[exited]`
+/// brackets (unresolved, just with more detail), or the `nvidia-smi`
+/// fallback's literal `?`. `[kernel]` (`PID 4`) is a real, stable name
+/// and passes. The one rule behind `hmn ps --filter` and
+/// `watch::matchable_name` (which adds a last-resolved fallback), so the
+/// two filters cannot disagree about what can be matched.
+#[must_use]
+pub fn filterable_name(name: Option<&str>) -> Option<&str> {
+    name.filter(|n| !matches!(*n, "[protected]" | "[exited]" | "?"))
+}
+
+/// Whether `name` contains any of `patterns`, ignoring case — the
+/// matching rule of both `hmn ps --filter` and `hmn watch --filter`.
+#[must_use]
+pub fn matches_any(name: &str, patterns: &[String]) -> bool {
+    let name = name.to_lowercase();
+    patterns.iter().any(|p| name.contains(&p.to_lowercase()))
 }
 
 /// Run the `ps` subcommand: collect process rows for the selected
@@ -176,6 +231,9 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
     );
 
     let mut rows: Vec<PsRow> = Vec::new();
+    // Processes `--filter` could not judge (no resolvable name), counted
+    // for the summary line rather than dropped silently.
+    let mut unnamed: usize = 0;
     for &idx in &device_indices {
         // Look up the device name once per device for the DEVICE column.
         // Failure here is non-fatal: row's `device_name` falls back to
@@ -205,7 +263,15 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
         let Ok(entries) = gpu_processes(idx) else {
             continue;
         };
-        for entry in entries.into_iter().filter(|e| filters.keeps(e)) {
+        for entry in entries {
+            match filters.judge(&entry) {
+                PsJudgement::Listed => {}
+                PsJudgement::Filtered => continue,
+                PsJudgement::Unnamed => {
+                    unnamed += 1;
+                    continue;
+                }
+            }
             rows.push(PsRow {
                 pid: entry.pid,
                 name: entry.name,
@@ -241,19 +307,19 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
     // Always printed, even when rows is non-empty, so the message is a
     // consistent confirmation rather than an error indicator. Redirect
     // 2>/dev/null to suppress.
-    eprintln!("hmn: {}", format_ps_summary(&rows, filters));
+    eprintln!("hmn: {}", format_ps_summary(&rows, filters, unnamed));
     Ok(())
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
-/// `<N> GPU process[es] found[ matching <filters>][ (<X.Y> <unit> committed total[; <M> protected — re-run elevated for names)].`
+/// `<N> GPU process[es] found[ matching <filters>][ (<X.Y> <unit> committed total[; <M> protected — re-run elevated for names][; <K> unnamed not matched])].`
 ///
 /// Two appendices after the noun, each elided when not applicable:
 ///
-/// - **Filter clause** (` matching pid=N device=M min=X unit`):
+/// - **Filter clause** (` matching pid=N device=M min=X unit filter="a"`):
 ///   appended only when at least one filter is active, as
 ///   [`PsFilters::clauses`] words it. Supports any combination of
-///   `--pid`, `--device`, and `--min` (echoed via
+///   `--pid`, `--device`, `--min` and `--filter` (`--min` echoed via
 ///   [`format_vram_precise`], not [`format_vram`], so a sub-MiB or
 ///   otherwise-imprecise `--min` value is never misreported).
 /// - **Committed-total parenthetical** (` (X.Y unit committed total)`,
@@ -293,11 +359,18 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool) -> Result<()> {
 ///   on Linux/macOS, where the fallback doesn't apply — any unresolved
 ///   row at all.
 ///
+///   Under `--filter`, a third continuation, `; K unnamed not matched`,
+///   counts the processes that passed `--pid` / `--min` but have no name
+///   a pattern can be matched against ([`filterable_name`]) — `unnamed`,
+///   as `run_ps` counted them. They are not listed, so they never add to
+///   the protected count; counting them keeps a filtered listing from
+///   hiding a process silently. Shown even when no row is listed.
+///
 /// "GPU process" / "GPU processes" (not the previous-release
 /// "compute process" / "compute processes") because on the `PDH`
 /// Windows path the list includes every GPU memory holder
 /// (compositor, browsers, games, compute), not just `CUDA` contexts.
-fn format_ps_summary(rows: &[PsRow], filters: &PsFilters) -> String {
+fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, unnamed: usize) -> String {
     let count = rows.len();
     let protected = rows
         .iter()
@@ -322,25 +395,26 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters) -> String {
         let _ = write!(out, " matching {}", clauses.join(" "));
     }
 
-    // Committed-total + protected parenthetical. The word "committed"
-    // hints at the WDDM commit-vs-resident distinction the Windows
-    // backend exposes — summing `used_bytes` across processes can
-    // exceed physical VRAM under WDDM (a real WDDM property, not a
-    // bug), so naming the figure "committed total" prevents that from
-    // reading as broken. Elided entirely when `count == 0` because
-    // "0 MiB committed total" carries no information.
-    match (count, protected) {
-        (0, _) => {}
-        (_, 0) => {
-            let _ = write!(out, " ({} committed total)", format_vram(committed_total));
-        }
-        (_, p) => {
-            let _ = write!(
-                out,
-                " ({} committed total; {p} protected — re-run elevated for names)",
-                format_vram(committed_total)
-            );
-        }
+    // The parenthetical: committed total, protected count, unnamed count,
+    // each present only when it says something, joined by "; ". The word
+    // "committed" hints at the WDDM commit-vs-resident distinction the
+    // Windows backend exposes — summing `used_bytes` across processes can
+    // exceed physical VRAM under WDDM (a real WDDM property, not a bug),
+    // so naming the figure "committed total" prevents that from reading
+    // as broken. The total is elided when `count == 0` because "0 MiB
+    // committed total" carries no information; `protected` is then 0 too.
+    let mut parts: Vec<String> = Vec::new();
+    if count > 0 {
+        parts.push(format!("{} committed total", format_vram(committed_total)));
+    }
+    if protected > 0 {
+        parts.push(format!("{protected} protected — re-run elevated for names"));
+    }
+    if unnamed > 0 {
+        parts.push(format!("{unnamed} unnamed not matched"));
+    }
+    if !parts.is_empty() {
+        let _ = write!(out, " ({})", parts.join("; "));
     }
 
     out.push('.');
@@ -433,10 +507,14 @@ mod tests {
 
     #[cfg(feature = "test-helpers")]
     #[test]
-    fn ps_filters_default_keeps_everything() {
+    fn ps_filters_default_lists_everything() {
         let f = PsFilters::default();
-        assert!(f.keeps(&entry(1, Some("a.exe"), 0, 0)));
-        assert!(f.keeps(&entry(2, None, 8 << 30, 1 << 30)));
+        assert_eq!(f.judge(&entry(1, Some("a.exe"), 0, 0)), PsJudgement::Listed);
+        // Without --filter, an unnamed process is simply listed.
+        assert_eq!(
+            f.judge(&entry(2, None, 8 << 30, 1 << 30)),
+            PsJudgement::Listed
+        );
         assert!(f.clauses().is_empty());
     }
 
@@ -448,19 +526,94 @@ mod tests {
             pid: Some(7),
             device: Some(0),
             min_bytes: Some(100 * MIB),
+            patterns: Vec::new(),
         };
         // The footprint is used + shared, as `--min` documents.
-        assert!(f.keeps(&entry(7, Some("a.exe"), 60 * MIB, 40 * MIB)));
-        assert!(!f.keeps(&entry(7, Some("a.exe"), 60 * MIB, 39 * MIB)));
-        assert!(!f.keeps(&entry(8, Some("a.exe"), 200 * MIB, 0)));
-        // `device` selects devices, not rows: it never rejects an entry.
-        assert!(
-            PsFilters {
-                device: Some(3),
-                ..PsFilters::default()
-            }
-            .keeps(&entry(1, None, 0, 0))
+        assert_eq!(
+            f.judge(&entry(7, Some("a.exe"), 60 * MIB, 40 * MIB)),
+            PsJudgement::Listed
         );
+        assert_eq!(
+            f.judge(&entry(7, Some("a.exe"), 60 * MIB, 39 * MIB)),
+            PsJudgement::Filtered
+        );
+        assert_eq!(
+            f.judge(&entry(8, Some("a.exe"), 200 * MIB, 0)),
+            PsJudgement::Filtered
+        );
+        // `device` selects devices, not rows: it never rejects an entry.
+        let f = PsFilters {
+            device: Some(3),
+            ..PsFilters::default()
+        };
+        assert_eq!(f.judge(&entry(1, None, 0, 0)), PsJudgement::Listed);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn ps_filters_patterns_are_a_case_insensitive_substring_or() {
+        let f = PsFilters {
+            patterns: vec!["CANVAS".to_owned(), "python".to_owned()],
+            ..PsFilters::default()
+        };
+        assert_eq!(
+            f.judge(&entry(1, Some("canvas"), 0, 0)),
+            PsJudgement::Listed
+        );
+        assert_eq!(
+            f.judge(&entry(2, Some("Python.exe"), 0, 0)),
+            PsJudgement::Listed
+        );
+        assert_eq!(
+            f.judge(&entry(3, Some("firefox.exe"), 0, 0)),
+            PsJudgement::Filtered
+        );
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn ps_filters_patterns_count_unnameable_rows_instead_of_dropping_them() {
+        let f = PsFilters {
+            patterns: vec!["canvas".to_owned()],
+            ..PsFilters::default()
+        };
+        for name in [None, Some("?"), Some("[protected]"), Some("[exited]")] {
+            assert_eq!(
+                f.judge(&entry(1, name, 0, 0)),
+                PsJudgement::Unnamed,
+                "{name:?}"
+            );
+        }
+        // `[kernel]` is a real name: judged by the pattern, not counted.
+        assert_eq!(
+            f.judge(&entry(4, Some("[kernel]"), 0, 0)),
+            PsJudgement::Filtered
+        );
+        // `--pid` / `--min` apply first: a row they reject is not counted.
+        let f = PsFilters {
+            pid: Some(9),
+            patterns: vec!["canvas".to_owned()],
+            ..PsFilters::default()
+        };
+        assert_eq!(f.judge(&entry(1, None, 0, 0)), PsJudgement::Filtered);
+    }
+
+    #[test]
+    fn matches_any_is_a_case_insensitive_substring_or() {
+        let pats = ["Figure13".to_owned(), "python".to_owned()];
+        assert!(matches_any("figure13_newline_patch.exe", &pats));
+        assert!(matches_any("PYTHON.EXE", &pats));
+        assert!(!matches_any("dwm.exe", &pats));
+    }
+
+    #[test]
+    fn filterable_name_excludes_only_the_non_names() {
+        assert_eq!(filterable_name(Some("canvas")), Some("canvas"));
+        assert_eq!(filterable_name(Some("[kernel]")), Some("[kernel]"));
+        assert_eq!(filterable_name(Some("[protected]")), None);
+        assert_eq!(filterable_name(Some("[exited]")), None);
+        assert_eq!(filterable_name(Some("?")), None);
+        assert_eq!(filterable_name(None), None);
     }
 
     // --- format_ps_table ---
@@ -640,13 +793,14 @@ mod tests {
             pid,
             device,
             min_bytes,
+            patterns: Vec::new(),
         }
     }
 
     #[test]
     fn format_ps_summary_zero_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), &filters(None, None, None)),
+            format_ps_summary(&unprotected_rows(0), &filters(None, None, None), 0),
             "0 GPU processes found."
         );
     }
@@ -657,7 +811,7 @@ mod tests {
         // get a committed-total parenthetical (the figure is 0 MiB —
         // honest, even when uninteresting).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &filters(None, None, None)),
+            format_ps_summary(&unprotected_rows(1), &filters(None, None, None), 0),
             "1 GPU process found (0 MiB committed total)."
         );
     }
@@ -665,7 +819,7 @@ mod tests {
     #[test]
     fn format_ps_summary_many_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(7), &filters(None, None, None)),
+            format_ps_summary(&unprotected_rows(7), &filters(None, None, None), 0),
             "7 GPU processes found (0 MiB committed total)."
         );
     }
@@ -675,7 +829,7 @@ mod tests {
         // Zero rows → no parenthetical at all (committed-total
         // elides; the filter clause still appears).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), &filters(Some(12345), None, None)),
+            format_ps_summary(&unprotected_rows(0), &filters(Some(12345), None, None), 0),
             "0 GPU processes found matching pid=12345."
         );
     }
@@ -683,7 +837,7 @@ mod tests {
     #[test]
     fn format_ps_summary_with_device_filter() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(2), &filters(None, Some(0), None)),
+            format_ps_summary(&unprotected_rows(2), &filters(None, Some(0), None), 0),
             "2 GPU processes found matching device=0 (0 MiB committed total)."
         );
     }
@@ -691,7 +845,7 @@ mod tests {
     #[test]
     fn format_ps_summary_with_both_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &filters(Some(99), Some(1), None)),
+            format_ps_summary(&unprotected_rows(1), &filters(Some(99), Some(1), None), 0),
             "1 GPU process found matching pid=99 device=1 (0 MiB committed total)."
         );
     }
@@ -701,7 +855,8 @@ mod tests {
         assert_eq!(
             format_ps_summary(
                 &unprotected_rows(0),
-                &filters(None, None, Some(50 * 1024 * 1024))
+                &filters(None, None, Some(50 * 1024 * 1024)),
+                0
             ),
             "0 GPU processes found matching min=50 MiB."
         );
@@ -713,7 +868,11 @@ mod tests {
         // format_vram, so a genuine 512 KiB filter read back as
         // "min=0 MiB" — indistinguishable from the documented --min 0
         // no-op, even though rows were actually being hidden.
-        let s = format_ps_summary(&unprotected_rows(0), &filters(None, None, Some(512 * 1024)));
+        let s = format_ps_summary(
+            &unprotected_rows(0),
+            &filters(None, None, Some(512 * 1024)),
+            0,
+        );
         assert_eq!(s, "0 GPU processes found matching min=512 KiB.");
     }
 
@@ -722,9 +881,39 @@ mod tests {
         assert_eq!(
             format_ps_summary(
                 &unprotected_rows(1),
-                &filters(Some(99), Some(1), Some(50 * 1024 * 1024))
+                &filters(Some(99), Some(1), Some(50 * 1024 * 1024)),
+                0
             ),
             "1 GPU process found matching pid=99 device=1 min=50 MiB (0 MiB committed total)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_echoes_filter_patterns_debug_quoted() {
+        let f = PsFilters {
+            min_bytes: Some(1024 * 1024 * 1024),
+            patterns: vec!["canvas".to_owned(), "a b".to_owned()],
+            ..PsFilters::default()
+        };
+        assert_eq!(
+            format_ps_summary(&unprotected_rows(1), &f, 0),
+            "1 GPU process found matching min=1 GiB filter=\"canvas\",\"a b\" (0 MiB committed total)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_counts_unnamed_rows_even_when_none_listed() {
+        let f = PsFilters {
+            patterns: vec!["canvas".to_owned()],
+            ..PsFilters::default()
+        };
+        assert_eq!(
+            format_ps_summary(&unprotected_rows(0), &f, 2),
+            "0 GPU processes found matching filter=\"canvas\" (2 unnamed not matched)."
+        );
+        assert_eq!(
+            format_ps_summary(&unprotected_rows(1), &f, 1),
+            "1 GPU process found matching filter=\"canvas\" (0 MiB committed total; 1 unnamed not matched)."
         );
     }
 
@@ -741,7 +930,7 @@ mod tests {
             row(1003, Some("c.exe"), FOUR_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (12.0 GiB committed total)."
         );
     }
@@ -756,7 +945,7 @@ mod tests {
             row(1002, Some("b.exe"), QUARTER_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "2 GPU processes found (512 MiB committed total)."
         );
     }
@@ -768,7 +957,7 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -778,7 +967,7 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -787,7 +976,7 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -797,7 +986,7 @@ mod tests {
         // No protected rows → no `M protected …` clause, but the
         // committed-total parenthetical still appears.
         assert_eq!(
-            format_ps_summary(&unprotected_rows(5), &filters(None, None, None)),
+            format_ps_summary(&unprotected_rows(5), &filters(None, None, None), 0),
             "5 GPU processes found (0 MiB committed total)."
         );
     }
@@ -807,7 +996,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(Some(42), Some(0), None)),
+            format_ps_summary(&rows, &filters(Some(42), Some(0), None), 0),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -821,7 +1010,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -838,7 +1027,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -852,7 +1041,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3001, Some("[exited]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -865,7 +1054,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(4, Some("[kernel]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(None, None, None)),
+            format_ps_summary(&rows, &filters(None, None, None), 0),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
