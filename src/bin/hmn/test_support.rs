@@ -30,6 +30,8 @@ pub fn row(
         device_index,
         device_name: device_name.map(str::to_owned),
         spilling: None,
+        paged: None,
+        shared_share: None,
     }
 }
 

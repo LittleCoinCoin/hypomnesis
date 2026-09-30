@@ -85,7 +85,7 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
 | 4 | Repeatable `hmn ps --pid` (request 6) | feature | ✅ |
 | 5 | `hmn ps --device` out of range exits `2` (request 5) | fix | ✅ |
 | 6 | `hmn ps --exit-status` (request 4) | feature | ✅ |
-| 7 | `PAGED` / `device` SPILL cells, `paged` / `shared_share` JSON, the device verdict on the summary line (request 2) | feature | ⬜ |
+| 7 | `PAGED` / `device` SPILL cells, `paged` / `shared_share` JSON, the device verdict on the summary line (request 2) | feature | ✅ |
 | 8 | `hypomnesis::process_exists` (observation 1) | feature | ⬜ |
 | 9 | `hmn watch` warns about a nonexistent explicit PID (observation 1) | feature | ⬜ |
 | 10 | `hmn watch` rows aligned under the header (observation 2) | fix | ⬜ |

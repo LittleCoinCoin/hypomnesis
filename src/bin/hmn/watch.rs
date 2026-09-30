@@ -640,7 +640,7 @@ impl Selection {
             };
         }
         let mut unmatchable = Vec::new();
-        // device_index / device_name / spilling are unused by
+        // device_index / device_name / spilling / paged / shared_share are unused by
         // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
         // defaulted rather than threaded through from the caller, which has
         // no device-name or live-spill context of its own to give.
@@ -675,6 +675,8 @@ impl Selection {
                 device_index: 0,
                 device_name: None,
                 spilling: None,
+                paged: None,
+                shared_share: None,
             })
             .collect();
         Selected {

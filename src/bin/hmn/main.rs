@@ -123,10 +123,15 @@ mod watch;
                   or above the 85% threshold AND adapter shared-resident at or above 256 MiB — \
                   an absolute floor, not growth above a baseline, because a one-shot listing has \
                   no history to measure growth against. Not equivalent to `hmn watch`'s verdict \
-                  for the same instant. `?` (not `no`) means spill isn't measurable here \
-                  (non-Windows, pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup) — never \
-                  rendered as `no`, so it can't be misread as \"measured, not spilling\". Use \
-                  `hmn watch`/`hmn spill` when the growth-over-baseline distinction matters.\n\
+                  for the same instant. On a spilling device (since v0.2.13) the process being \
+                  paged — SHARED at or above the same 256 MiB floor — reads `PAGED` and the \
+                  device's other processes read `device`; the summary line states the device's \
+                  verdict once, with its free VRAM, shared bytes and paged count. `PAGED` names \
+                  who is being paged, not who caused the pressure. `?` (not `no`) means spill \
+                  isn't measurable here (non-Windows, pre-WDDM-2.0, a non-NVIDIA adapter, or a \
+                  PDH hiccup) — never rendered as `no`, so it can't be misread as \"measured, \
+                  not spilling\". Use `hmn watch`/`hmn spill` when the growth-over-baseline \
+                  distinction matters.\n\
                   - On Windows, `?` in the NAME column is now rare (since v0.2.8): a \
                   `CreateToolhelp32Snapshot` fallback (the same mechanism `Get-Process`/Task \
                   Manager use) resolves most PIDs `OpenProcess` can't, including ordinary \
@@ -234,8 +239,14 @@ enum Commands {
         /// `device_name` (string or null), `spilling` (true, false, or
         /// null — a single-snapshot approximation of the `hmn watch`
         /// spill co-condition, broadcast per device; null means "not
-        /// measurable here", never collapsed into false). Row order
-        /// follows `--sort`.
+        /// measurable here", never collapsed into false), `paged` (true,
+        /// false, or null — since v0.2.13, true when the device is
+        /// spilling and this row's shared bytes are at least 256 MiB:
+        /// this process is being paged), `shared_share` (number 0–1 to
+        /// four decimals, or null — this row's fraction of the device's
+        /// shared bytes over every process). `paged` and `shared_share`
+        /// are null exactly when `spilling` is. Row order follows
+        /// `--sort`.
         #[arg(long)]
         json: bool,
         /// Exit `1` when no process is listed, `0` when at least one is —

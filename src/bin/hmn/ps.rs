@@ -8,10 +8,11 @@ use std::fmt::Write as _;
 use std::process::ExitCode;
 
 use clap::ValueEnum;
+use hypomnesis::spill::DEFAULT_SHARED_GROWTH_BYTES;
 use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
-    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
+    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -41,6 +42,17 @@ pub struct PsRow {
     /// or a live `PDH` sample failure) — never collapsed into
     /// `Some(false)`.
     pub spilling: Option<bool>,
+    /// Whether this process is being *paged* — its device is spilling
+    /// and its own SHARED is at least [`DEFAULT_SHARED_GROWTH_BYTES`],
+    /// the floor the spill condition itself uses. `None` exactly when
+    /// [`Self::spilling`] is. Says who is being paged, not who caused the
+    /// pressure: the memory manager pages whatever it chooses.
+    pub paged: Option<bool>,
+    /// This process's fraction of its device's shared-resident bytes,
+    /// summed over every process on the device (before any filter),
+    /// `0.0..=1.0`. `0.0` when the device holds no shared bytes; `None`
+    /// exactly when [`Self::spilling`] is.
+    pub shared_share: Option<f64>,
 }
 
 /// Display-order key for `hmn ps --sort` (and, always pinned to
@@ -81,6 +93,71 @@ pub enum SortKey {
 #[must_use]
 pub const fn footprint_bytes(used_bytes: u64, shared_used_bytes: u64) -> u64 {
     used_bytes.saturating_add(shared_used_bytes)
+}
+
+/// Whether a process holding `shared_used_bytes` of shared-resident
+/// memory counts as *paged* on a spilling device: at least
+/// [`DEFAULT_SHARED_GROWTH_BYTES`] (256 MiB), the floor the spill
+/// condition itself applies adapter-wide. It clears the benign staging
+/// baseline of an ordinary desktop process (tens of MiB; 110 MiB for an
+/// editor in the askesis report).
+#[must_use]
+pub const fn is_paged(shared_used_bytes: u64) -> bool {
+    shared_used_bytes >= DEFAULT_SHARED_GROWTH_BYTES
+}
+
+/// A row's [`PsRow::paged`] and [`PsRow::shared_share`] from its device's
+/// verdict (`spilling`), its own shared bytes, and the device's total
+/// shared bytes over every process. Both `None` when `spilling` is — the
+/// same "can't tell" the broadcast verdict carries.
+#[must_use]
+pub fn paged_and_share(
+    spilling: Option<bool>,
+    shared_used_bytes: u64,
+    device_shared_bytes: u64,
+) -> (Option<bool>, Option<f64>) {
+    let Some(spilling) = spilling else {
+        return (None, None);
+    };
+    let share = if device_shared_bytes == 0 {
+        0.0
+    } else {
+        // CAST: u64 → f64, byte counts; a ratio needs no more precision
+        // than f64's 53-bit mantissa gives for any real GPU memory size.
+        #[allow(clippy::as_conversions, clippy::cast_precision_loss)]
+        let ratio = shared_used_bytes as f64 / device_shared_bytes as f64;
+        ratio.min(1.0)
+    };
+    (Some(spilling && is_paged(shared_used_bytes)), Some(share))
+}
+
+/// One spilling device's evidence for the summary line: what `hmn ps`
+/// states once there instead of leaving the verdict to be read off every
+/// row. Computed over every process on the device, before any filter, so
+/// the device verdict does not depend on what is displayed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSpill {
+    /// Zero-based device index (`NVML`-canonical).
+    pub index: u32,
+    /// The device's free `VRAM` in bytes, from `device_info`. `None`
+    /// when that query failed.
+    pub free_bytes: Option<u64>,
+    /// Shared-resident bytes summed over every process on the device.
+    pub shared_bytes: u64,
+    /// How many processes on the device are paged ([`is_paged`]).
+    pub paged: usize,
+}
+
+/// What the summary line reports beyond the listed rows: the processes
+/// `--filter` could not judge, and the spilling devices.
+#[derive(Debug, Clone, Default)]
+pub struct SummaryNotes {
+    /// Processes that passed `--pid` / `--min` but had no name `--filter`
+    /// could match ([`PsJudgement::Unnamed`]).
+    pub unnamed: usize,
+    /// One entry per device whose verdict is `Some(true)`, in device
+    /// order. Empty when no device is spilling or spill is not measurable.
+    pub spilling: Vec<DeviceSpill>,
 }
 
 /// Build the row comparator for a given [`SortKey`], shared by `hmn ps`
@@ -258,14 +335,17 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     );
 
     let mut rows: Vec<PsRow> = Vec::new();
-    // Processes `--filter` could not judge (no resolvable name), counted
-    // for the summary line rather than dropped silently.
-    let mut unnamed: usize = 0;
+    // Processes `--filter` could not judge (no resolvable name), and the
+    // spilling devices — what the summary line reports beyond the rows.
+    let mut notes = SummaryNotes::default();
     for &idx in &device_indices {
-        // Look up the device name once per device for the DEVICE column.
-        // Failure here is non-fatal: row's `device_name` falls back to
-        // None and the formatter renders `GPU N` instead.
-        let device_name = device_info(idx).ok().and_then(|d| d.name);
+        // Look up the device once: its name for the DEVICE column, its
+        // free VRAM for a spilling device's summary clause. Failure here
+        // is non-fatal: row's `device_name` falls back to None and the
+        // formatter renders `GPU N` instead; the clause omits free VRAM.
+        let info = device_info(idx).ok();
+        let free_bytes = info.as_ref().map(|d| d.free_bytes);
+        let device_name = info.and_then(|d| d.name);
         // One live spill sample per device (not per row): `snapshot_is_spilling`
         // is adapter-wide, so every row on this device gets the same
         // value — the same "broadcast" shape `hmn watch`'s `spilling`
@@ -295,15 +375,34 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
             }
             Err(_) => continue,
         };
+        // Over every process on the device, before any filter: a row's
+        // share of the device's shared bytes, and the device's summary
+        // clause, must not depend on which rows are displayed.
+        let device_shared_bytes = entries
+            .iter()
+            .fold(0_u64, |sum, e| sum.saturating_add(e.shared_used_bytes));
+        if spilling == Some(true) {
+            notes.spilling.push(DeviceSpill {
+                index: idx,
+                free_bytes,
+                shared_bytes: device_shared_bytes,
+                paged: entries
+                    .iter()
+                    .filter(|e| is_paged(e.shared_used_bytes))
+                    .count(),
+            });
+        }
         for entry in entries {
             match filters.judge(&entry) {
                 PsJudgement::Listed => {}
                 PsJudgement::Filtered => continue,
                 PsJudgement::Unnamed => {
-                    unnamed += 1;
+                    notes.unnamed += 1;
                     continue;
                 }
             }
+            let (paged, shared_share) =
+                paged_and_share(spilling, entry.shared_used_bytes, device_shared_bytes);
             rows.push(PsRow {
                 pid: entry.pid,
                 name: entry.name,
@@ -314,6 +413,8 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
                 // rows for this device.
                 device_name: device_name.clone(),
                 spilling,
+                paged,
+                shared_share,
             });
         }
     }
@@ -339,7 +440,7 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     // Always printed, even when rows is non-empty, so the message is a
     // consistent confirmation rather than an error indicator. Redirect
     // 2>/dev/null to suppress.
-    eprintln!("hmn: {}", format_ps_summary(&rows, filters, unnamed));
+    eprintln!("hmn: {}", format_ps_summary(&rows, filters, &notes));
     if exit_status && rows.is_empty() {
         ExitCode::FAILURE
     } else {
@@ -348,7 +449,7 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
-/// `<N> GPU process[es] found[ matching <filters>][ (<X.Y> <unit> committed total[; <M> protected — re-run elevated for names][; <K> unnamed not matched])].`
+/// `<N> GPU process[es] found[ matching <filters>][ (<X.Y> <unit> committed total[; <M> protected — re-run elevated for names][; <K> unnamed not matched])][; device <D> spilling: [<F> free, ]<S> shared, <P> process[es] paged]….`
 ///
 /// Two appendices after the noun, each elided when not applicable:
 ///
@@ -397,16 +498,24 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///
 ///   Under `--filter`, a third continuation, `; K unnamed not matched`,
 ///   counts the processes that passed `--pid` / `--min` but have no name
-///   a pattern can be matched against ([`filterable_name`]) — `unnamed`,
-///   as `run_ps` counted them. They are not listed, so they never add to
+///   a pattern can be matched against ([`filterable_name`]) —
+///   `notes.unnamed`, as `run_ps` counted them. They are not listed, so they never add to
 ///   the protected count; counting them keeps a filtered listing from
 ///   hiding a process silently. Shown even when no row is listed.
+///
+/// - **Device verdict** (`; device D spilling: F free, S shared, P
+///   processes paged`), once per device in `notes.spilling`, after the
+///   parenthetical. The SPILL column repeats a device's verdict on each
+///   of its rows; this states it once, with the evidence: free `VRAM`
+///   (omitted when `device_info` failed), the shared-resident bytes summed
+///   over every process on the device, and how many of those are paged
+///   ([`is_paged`]) — all counted before any filter.
 ///
 /// "GPU process" / "GPU processes" (not the previous-release
 /// "compute process" / "compute processes") because on the `PDH`
 /// Windows path the list includes every GPU memory holder
 /// (compositor, browsers, games, compute), not just `CUDA` contexts.
-fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, unnamed: usize) -> String {
+fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) -> String {
     let count = rows.len();
     let protected = rows
         .iter()
@@ -446,11 +555,27 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, unnamed: usize) -> Str
     if protected > 0 {
         parts.push(format!("{protected} protected — re-run elevated for names"));
     }
-    if unnamed > 0 {
-        parts.push(format!("{unnamed} unnamed not matched"));
+    if notes.unnamed > 0 {
+        parts.push(format!("{} unnamed not matched", notes.unnamed));
     }
     if !parts.is_empty() {
         let _ = write!(out, " ({})", parts.join("; "));
+    }
+
+    // The device verdict, stated once per spilling device rather than
+    // left to be read off a SPILL cell repeated on every row.
+    for d in &notes.spilling {
+        let _ = write!(out, "; device {} spilling: ", d.index);
+        if let Some(free) = d.free_bytes {
+            let _ = write!(out, "{} free, ", format_vram(free));
+        }
+        let noun = if d.paged == 1 { "process" } else { "processes" };
+        let _ = write!(
+            out,
+            "{} shared, {} {noun} paged",
+            format_vram(d.shared_bytes),
+            d.paged
+        );
     }
 
     out.push('.');
@@ -473,18 +598,36 @@ fn format_ps_table(rows: &[PsRow]) -> String {
                 .clone()
                 .unwrap_or_else(|| format!("GPU {}", r.device_index)),
             // BORROW: explicit to_owned — the table owns its cells.
-            spill_cell(r.spilling).to_owned(),
+            ps_spill_cell(r).to_owned(),
         ]);
     }
     table.render(Some(""), "")
 }
 
+/// The SPILL cell of a `hmn ps` row: `PAGED` when its device is spilling
+/// and this process is being paged ([`PsRow::paged`]), `device` when its
+/// device is spilling but this process is not paged, `no` when the device
+/// is not spilling, and `?` when spill is not measurable — never `no`, so
+/// "can't tell" is not misread as "measured, not spilling". `hmn watch`
+/// keeps the plain per-device cell (`spill_cell`).
+#[must_use]
+pub const fn ps_spill_cell(row: &PsRow) -> &'static str {
+    match (row.spilling, row.paged) {
+        (Some(true), Some(true)) => "PAGED",
+        (Some(true), _) => "device",
+        (Some(false), _) => "no",
+        (None, _) => "?",
+    }
+}
+
 /// Format `ps` rows as a JSON array, one object per row. Hand-rolled
 /// (no `serde` dep — keeps the `cli` feature lean for v0.2). Each
-/// object: `{"pid":N,"name":<string|null>,"used_bytes":N,"shared_used_bytes":N,"device_index":N,"device_name":<string|null>,"spilling":<true|false|null>}`.
+/// object: `{"pid":N,"name":<string|null>,"used_bytes":N,"shared_used_bytes":N,"device_index":N,"device_name":<string|null>,"spilling":<true|false|null>,"paged":<true|false|null>,"shared_share":<number|null>}`.
 /// `spilling` is `null`, never `false`, when spill isn't measurable
-/// here — see [`PsRow::spilling`]'s doc. String values are
-/// JSON-escaped via [`json_string_or_null`].
+/// here — see [`PsRow::spilling`]'s doc — and `paged` and `shared_share`
+/// are `null` exactly when it is. `shared_share` is written to four
+/// decimal places (`0.9048`). String values are JSON-escaped via
+/// [`json_string_or_null`].
 fn format_ps_json(rows: &[PsRow]) -> String {
     let mut out = String::from("[");
     for (i, row) in rows.iter().enumerate() {
@@ -494,9 +637,13 @@ fn format_ps_json(rows: &[PsRow]) -> String {
         let name_json = json_string_or_null(row.name.as_deref());
         let device_name_json = json_string_or_null(row.device_name.as_deref());
         let spilling_json = json_value_or_null(row.spilling);
+        let paged_json = json_value_or_null(row.paged);
+        let share_json = row
+            .shared_share
+            .map_or_else(|| "null".to_owned(), |f| format!("{f:.4}"));
         let _ = write!(
             out,
-            r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json},"spilling":{spilling_json}}}"#,
+            r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json},"spilling":{spilling_json},"paged":{paged_json},"shared_share":{share_json}}}"#,
             row.pid, row.used_bytes, row.shared_used_bytes, row.device_index,
         );
     }
@@ -522,6 +669,8 @@ mod tests {
             device_index: 0,
             device_name: None,
             spilling: None,
+            paged: None,
+            shared_share: None,
         }
     }
 
@@ -536,6 +685,8 @@ mod tests {
             device_index: 0,
             device_name: None,
             spilling,
+            paged: None,
+            shared_share: None,
         }
     }
 
@@ -652,6 +803,75 @@ mod tests {
         assert_eq!(filterable_name(None), None);
     }
 
+    // --- paged mark (request 2) ---
+
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+
+    #[test]
+    fn is_paged_uses_the_spill_conditions_floor() {
+        assert!(!is_paged(255 * MIB));
+        assert!(is_paged(256 * MIB));
+        // The askesis report's benign baselines are not paged.
+        assert!(!is_paged(48 * MIB));
+        assert!(!is_paged(110 * MIB));
+    }
+
+    #[test]
+    fn paged_and_share_is_none_exactly_when_spill_is_unmeasurable() {
+        assert_eq!(paged_and_share(None, 2 * GIB, 4 * GIB), (None, None));
+    }
+
+    #[test]
+    fn paged_and_share_marks_only_on_a_spilling_device() {
+        assert_eq!(
+            paged_and_share(Some(true), GIB, 4 * GIB),
+            (Some(true), Some(0.25))
+        );
+        // Not spilling: never paged, but the share is still reported.
+        assert_eq!(
+            paged_and_share(Some(false), GIB, 4 * GIB),
+            (Some(false), Some(0.25))
+        );
+        assert_eq!(
+            paged_and_share(Some(true), 48 * MIB, 4 * GIB).0,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn paged_and_share_is_zero_on_a_device_without_shared_bytes() {
+        assert_eq!(paged_and_share(Some(false), 0, 0), (Some(false), Some(0.0)));
+    }
+
+    /// A row on device 0 with the given verdict, SHARED and mark.
+    fn row_marked(spilling: Option<bool>, shared: u64, paged: Option<bool>) -> PsRow {
+        PsRow {
+            spilling,
+            paged,
+            shared_used_bytes: shared,
+            ..row(1, Some("a.exe"), 0, 0, None)
+        }
+    }
+
+    #[test]
+    fn ps_spill_cell_names_the_paged_process_and_the_device() {
+        assert_eq!(
+            ps_spill_cell(&row_marked(Some(true), 2 * GIB, Some(true))),
+            "PAGED"
+        );
+        assert_eq!(
+            ps_spill_cell(&row_marked(Some(true), 0, Some(false))),
+            "device"
+        );
+        assert_eq!(
+            ps_spill_cell(&row_marked(Some(false), 0, Some(false))),
+            "no"
+        );
+        // "can't tell" must never render as "measured, not spilling".
+        assert_eq!(ps_spill_cell(&row_marked(None, 0, None)), "?");
+    }
+
     // --- format_ps_table ---
 
     #[test]
@@ -700,16 +920,27 @@ mod tests {
     }
 
     #[test]
-    fn format_ps_table_spill_column_renders_spill_no_and_unknown() {
+    fn format_ps_table_spill_column_renders_paged_device_no_and_unknown() {
+        // Since v0.2.13 a spilling device's verdict is not broadcast as
+        // `SPILL` on every row: the paged process reads `PAGED`, the
+        // device's other processes `device`.
         let rows = [
-            row_spilling(1, Some("a.exe"), Some(true)),
-            row_spilling(2, Some("b.exe"), Some(false)),
-            row_spilling(3, Some("c.exe"), None),
+            PsRow {
+                name: Some("a.exe".to_owned()),
+                ..row_marked(Some(true), 0, Some(true))
+            },
+            PsRow {
+                name: Some("b.exe".to_owned()),
+                ..row_marked(Some(true), 0, Some(false))
+            },
+            row_spilling(2, Some("c.exe"), Some(false)),
+            row_spilling(3, Some("d.exe"), None),
         ];
         let s = format_ps_table(&rows);
-        assert!(s.contains("a.exe  0 MiB  0 MiB   GPU 0   SPILL"));
-        assert!(s.contains("b.exe  0 MiB  0 MiB   GPU 0   no   "));
-        assert!(s.contains("c.exe  0 MiB  0 MiB   GPU 0   ?    "));
+        assert!(s.contains("a.exe  0 MiB  0 MiB   GPU 0   PAGED "));
+        assert!(s.contains("b.exe  0 MiB  0 MiB   GPU 0   device"));
+        assert!(s.contains("c.exe  0 MiB  0 MiB   GPU 0   no    "));
+        assert!(s.contains("d.exe  0 MiB  0 MiB   GPU 0   ?     "));
     }
 
     #[test]
@@ -753,7 +984,7 @@ mod tests {
         let s = format_ps_json(&[r]);
         assert_eq!(
             s,
-            "[{\"pid\":12345,\"name\":\"python.exe\",\"used_bytes\":8388608,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"RTX 5060 Ti\",\"spilling\":null}]\n"
+            "[{\"pid\":12345,\"name\":\"python.exe\",\"used_bytes\":8388608,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"RTX 5060 Ti\",\"spilling\":null,\"paged\":null,\"shared_share\":null}]\n"
         );
     }
 
@@ -763,7 +994,7 @@ mod tests {
         let s = format_ps_json(&[r]);
         assert_eq!(
             s,
-            "[{\"pid\":42,\"name\":null,\"used_bytes\":0,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":null,\"spilling\":null}]\n"
+            "[{\"pid\":42,\"name\":null,\"used_bytes\":0,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":null,\"spilling\":null,\"paged\":null,\"shared_share\":null}]\n"
         );
     }
 
@@ -774,8 +1005,8 @@ mod tests {
         let s = format_ps_json(&[a, b]);
         assert_eq!(
             s,
-            "[{\"pid\":1,\"name\":\"a.exe\",\"used_bytes\":1048576,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null},\
-             {\"pid\":2,\"name\":\"b.exe\",\"used_bytes\":2097152,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null}]\n"
+            "[{\"pid\":1,\"name\":\"a.exe\",\"used_bytes\":1048576,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null,\"paged\":null,\"shared_share\":null},\
+             {\"pid\":2,\"name\":\"b.exe\",\"used_bytes\":2097152,\"shared_used_bytes\":0,\"device_index\":0,\"device_name\":\"GPU\",\"spilling\":null,\"paged\":null,\"shared_share\":null}]\n"
         );
     }
 
@@ -790,6 +1021,20 @@ mod tests {
         assert!(s.contains(r#""pid":1,"name":"a.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":true"#));
         assert!(s.contains(r#""pid":2,"name":"b.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":false"#));
         assert!(s.contains(r#""pid":3,"name":"c.exe","used_bytes":0,"shared_used_bytes":0,"device_index":0,"device_name":null,"spilling":null"#));
+    }
+
+    #[test]
+    fn format_ps_json_paged_and_shared_share() {
+        let paged = PsRow {
+            spilling: Some(true),
+            paged: Some(true),
+            shared_share: Some(1.9 / 2.1),
+            ..row(26476, Some("canvas.exe"), 0, 0, None)
+        };
+        let unmeasured = row(5, Some("a"), 0, 0, None);
+        let s = format_ps_json(&[paged, unmeasured]);
+        assert!(s.contains(r#""spilling":true,"paged":true,"shared_share":0.9048}"#));
+        assert!(s.contains(r#""spilling":null,"paged":null,"shared_share":null}"#));
     }
 
     #[test]
@@ -828,10 +1073,33 @@ mod tests {
         PsFilters::new(pids, device, min_bytes, Vec::new())
     }
 
+    /// Summary notes carrying only an unnamed count.
+    fn unnamed(n: usize) -> SummaryNotes {
+        SummaryNotes {
+            unnamed: n,
+            spilling: Vec::new(),
+        }
+    }
+
+    /// The askesis report's spilling RTX 5060 Ti, device 0: 154 MiB free,
+    /// 2.1 GiB shared over every process, one of them paged.
+    fn askesis_spill() -> DeviceSpill {
+        DeviceSpill {
+            index: 0,
+            free_bytes: Some(154 * MIB),
+            shared_bytes: 2 * GIB + 100 * MIB,
+            paged: 1,
+        }
+    }
+
     #[test]
     fn format_ps_summary_zero_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), &filters(&[], None, None), 0),
+            format_ps_summary(
+                &unprotected_rows(0),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
             "0 GPU processes found."
         );
     }
@@ -842,7 +1110,11 @@ mod tests {
         // get a committed-total parenthetical (the figure is 0 MiB —
         // honest, even when uninteresting).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &filters(&[], None, None), 0),
+            format_ps_summary(
+                &unprotected_rows(1),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
             "1 GPU process found (0 MiB committed total)."
         );
     }
@@ -850,7 +1122,11 @@ mod tests {
     #[test]
     fn format_ps_summary_many_no_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(7), &filters(&[], None, None), 0),
+            format_ps_summary(
+                &unprotected_rows(7),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
             "7 GPU processes found (0 MiB committed total)."
         );
     }
@@ -860,7 +1136,11 @@ mod tests {
         // Zero rows → no parenthetical at all (committed-total
         // elides; the filter clause still appears).
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), &filters(&[12345], None, None), 0),
+            format_ps_summary(
+                &unprotected_rows(0),
+                &filters(&[12345], None, None),
+                &SummaryNotes::default()
+            ),
             "0 GPU processes found matching pid=12345."
         );
     }
@@ -868,7 +1148,11 @@ mod tests {
     #[test]
     fn format_ps_summary_with_device_filter() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(2), &filters(&[], Some(0), None), 0),
+            format_ps_summary(
+                &unprotected_rows(2),
+                &filters(&[], Some(0), None),
+                &SummaryNotes::default()
+            ),
             "2 GPU processes found matching device=0 (0 MiB committed total)."
         );
     }
@@ -876,7 +1160,11 @@ mod tests {
     #[test]
     fn format_ps_summary_with_both_filters() {
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &filters(&[99], Some(1), None), 0),
+            format_ps_summary(
+                &unprotected_rows(1),
+                &filters(&[99], Some(1), None),
+                &SummaryNotes::default()
+            ),
             "1 GPU process found matching pid=99 device=1 (0 MiB committed total)."
         );
     }
@@ -887,7 +1175,7 @@ mod tests {
             format_ps_summary(
                 &unprotected_rows(0),
                 &filters(&[], None, Some(50 * 1024 * 1024)),
-                0
+                &SummaryNotes::default()
             ),
             "0 GPU processes found matching min=50 MiB."
         );
@@ -902,7 +1190,7 @@ mod tests {
         let s = format_ps_summary(
             &unprotected_rows(0),
             &filters(&[], None, Some(512 * 1024)),
-            0,
+            &SummaryNotes::default(),
         );
         assert_eq!(s, "0 GPU processes found matching min=512 KiB.");
     }
@@ -913,9 +1201,48 @@ mod tests {
             format_ps_summary(
                 &unprotected_rows(1),
                 &filters(&[99], Some(1), Some(50 * 1024 * 1024)),
-                0
+                &SummaryNotes::default()
             ),
             "1 GPU process found matching pid=99 device=1 min=50 MiB (0 MiB committed total)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_states_the_device_verdict_once() {
+        let rows = vec![row(26476, Some("canvas.exe"), 14 * GIB, 0, None)];
+        let notes = SummaryNotes {
+            unnamed: 0,
+            spilling: vec![askesis_spill()],
+        };
+        assert_eq!(
+            format_ps_summary(&rows, &PsFilters::default(), &notes),
+            "1 GPU process found (14.0 GiB committed total); device 0 spilling: \
+             154 MiB free, 2.1 GiB shared, 1 process paged."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_device_verdict_without_free_and_plural() {
+        let notes = SummaryNotes {
+            unnamed: 0,
+            spilling: vec![
+                DeviceSpill {
+                    free_bytes: None,
+                    paged: 0,
+                    ..askesis_spill()
+                },
+                DeviceSpill {
+                    index: 1,
+                    paged: 2,
+                    ..askesis_spill()
+                },
+            ],
+        };
+        // The verdict holds even when a filter lists nothing.
+        assert_eq!(
+            format_ps_summary(&unprotected_rows(0), &filters(&[7], None, None), &notes),
+            "0 GPU processes found matching pid=7; device 0 spilling: 2.1 GiB shared, \
+             0 processes paged; device 1 spilling: 154 MiB free, 2.1 GiB shared, 2 processes paged."
         );
     }
 
@@ -925,7 +1252,7 @@ mod tests {
             format_ps_summary(
                 &unprotected_rows(0),
                 &filters(&[15503, 15534, 15503], None, None),
-                0
+                &SummaryNotes::default()
             ),
             "0 GPU processes found matching pid=15503,15534."
         );
@@ -948,7 +1275,7 @@ mod tests {
             ..PsFilters::default()
         };
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &f, 0),
+            format_ps_summary(&unprotected_rows(1), &f, &SummaryNotes::default()),
             "1 GPU process found matching min=1 GiB filter=\"canvas\",\"a b\" (0 MiB committed total)."
         );
     }
@@ -960,11 +1287,11 @@ mod tests {
             ..PsFilters::default()
         };
         assert_eq!(
-            format_ps_summary(&unprotected_rows(0), &f, 2),
+            format_ps_summary(&unprotected_rows(0), &f, &unnamed(2)),
             "0 GPU processes found matching filter=\"canvas\" (2 unnamed not matched)."
         );
         assert_eq!(
-            format_ps_summary(&unprotected_rows(1), &f, 1),
+            format_ps_summary(&unprotected_rows(1), &f, &unnamed(1)),
             "1 GPU process found matching filter=\"canvas\" (0 MiB committed total; 1 unnamed not matched)."
         );
     }
@@ -982,7 +1309,7 @@ mod tests {
             row(1003, Some("c.exe"), FOUR_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (12.0 GiB committed total)."
         );
     }
@@ -997,7 +1324,7 @@ mod tests {
             row(1002, Some("b.exe"), QUARTER_GIB, 0, None),
         ];
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "2 GPU processes found (512 MiB committed total)."
         );
     }
@@ -1009,7 +1336,7 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1019,7 +1346,7 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -1028,7 +1355,7 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -1038,7 +1365,11 @@ mod tests {
         // No protected rows → no `M protected …` clause, but the
         // committed-total parenthetical still appears.
         assert_eq!(
-            format_ps_summary(&unprotected_rows(5), &filters(&[], None, None), 0),
+            format_ps_summary(
+                &unprotected_rows(5),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
             "5 GPU processes found (0 MiB committed total)."
         );
     }
@@ -1048,7 +1379,11 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[42], Some(0), None), 0),
+            format_ps_summary(
+                &rows,
+                &filters(&[42], Some(0), None),
+                &SummaryNotes::default()
+            ),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1062,7 +1397,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1079,7 +1414,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1093,7 +1428,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3001, Some("[exited]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -1106,7 +1441,7 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(4, Some("[kernel]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), 0),
+            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
             "3 GPU processes found (0 MiB committed total)."
         );
     }
@@ -1124,6 +1459,8 @@ mod tests {
             device_index: 0,
             device_name: None,
             spilling: None,
+            paged: None,
+            shared_share: None,
         }
     }
 

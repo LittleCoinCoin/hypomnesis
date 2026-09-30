@@ -32,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default is unchanged: `hmn ps` exits `0` whether or not anything matched. Same report,
   request 4.
 
+- **`hmn ps` says which process is being paged, and states the device's spill verdict once**
+  (`src/bin/hmn/ps.rs`) — on a spilling device the SPILL column no longer repeats `SPILL` on
+  every row, where `hmn.exe` at 0 MiB read exactly like the trainer being paged. The process
+  being paged (its own SHARED at or above 256 MiB, the floor the spill condition itself uses)
+  reads `PAGED`; the device's other processes read `device`; `no` and `?` are unchanged. The
+  stderr summary states the verdict once per spilling device, with its evidence:
+  `…; device 0 spilling: 154 MiB free, 2.1 GiB shared, 1 process paged.` Shared bytes and the
+  paged count are summed over every process on the device, before any filter, so the verdict
+  does not depend on what is displayed. `--json` rows gain `paged` (`true`/`false`/`null`) and
+  `shared_share` (the row's fraction of the device's shared bytes, four decimals, or `null`),
+  both `null` exactly when `spilling` is; `spilling` is unchanged. The mark means *paged*, not
+  *cause*: the memory manager pages whatever it chooses (the askesis report's revision, citing
+  [`dogfooding-spill-triage-watch-mode.md`](docs/dogfooding-feedbacks/dogfooding-spill-triage-watch-mode.md)'s
+  third verdict). Live-validated on the RTX 5060 Ti with `tools/spillforge`: `spillforge.exe`
+  at 423 MiB shared read `PAGED`, every other row `device`. Same report, request 2.
+
 ### Changed
 
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`
