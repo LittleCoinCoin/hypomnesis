@@ -468,7 +468,7 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// | Platform | Source | `None` when |
 /// |---|---|---|
 /// | Linux | `/proc/<pid>/status`, whose `Tgid` must equal `pid` (so a thread ID is not taken for a process) | the file exists but cannot be read |
-/// | Windows (`pdh` feature) | a `Toolhelp32` process snapshot, the same one `gpu_processes` uses to name processes `OpenProcess` cannot | the snapshot cannot be taken |
+/// | Windows (`pdh` feature) | a `Toolhelp32` process snapshot, the mechanism `gpu_processes` uses to name processes `OpenProcess` cannot (a process whose snapshot name is empty — none is known — would read as absent) | the snapshot cannot be taken |
 /// | macOS (`metal` feature) | `proc_pidpath`; `ESRCH` means no such process | `proc_pidpath` fails for another reason (e.g. `EPERM`), or `pid` exceeds `i32::MAX` |
 /// | anything else | — | always |
 ///
@@ -480,6 +480,7 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// command line names no process, rather than watching it silently as
 /// `0` bytes.
 #[must_use]
+#[allow(unused_variables)] // `pid` unused where no process-lookup source is compiled in
 #[allow(clippy::missing_const_for_fn)] // const only on platforms whose arm is `None`
 pub fn process_exists(pid: u32) -> Option<bool> {
     #[cfg(target_os = "linux")]
@@ -505,9 +506,8 @@ pub fn process_exists(pid: u32) -> Option<bool> {
         all(target_os = "macos", feature = "metal")
     )))]
     {
-        // EXPLICIT: no process-lookup source on this platform / feature
-        // set — "don't know", never "no".
-        let _ = pid;
+        // No process-lookup source on this platform / feature set:
+        // "don't know", never "no".
         None
     }
 }
@@ -624,7 +624,6 @@ fn bounds_check(index: u32) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

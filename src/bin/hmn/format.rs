@@ -224,9 +224,11 @@ pub fn json_string(s: &str) -> String {
 /// A JSON number or boolean for `v` — its `Display` form, which is already
 /// valid JSON for integers and `bool` — or `null` for `None`. The one
 /// spelling of every optional numeric or boolean field in `hmn`'s
-/// `--json` output (`spilling`, `reserved_bytes`, the `start` record's
-/// `duration_ms` / `top` / `min_bytes`). Callers pass integers or `bool`
-/// only: a float's `Display` (`NaN`, `inf`) would not be valid JSON.
+/// `--json` output (`spilling`, `paged`, `shared_share`, `reserved_bytes`,
+/// the `start` record's `duration_ms` / `top` / `min_bytes`). Callers pass
+/// integers, `bool`, or a float already formatted as a JSON number
+/// (`shared_share`'s `format!("{f:.4}")`): a float's own `Display` (`NaN`,
+/// `inf`) would not be valid JSON.
 #[must_use]
 pub fn json_value_or_null<T: std::fmt::Display>(v: Option<T>) -> String {
     v.map_or_else(|| String::from("null"), |v| v.to_string())

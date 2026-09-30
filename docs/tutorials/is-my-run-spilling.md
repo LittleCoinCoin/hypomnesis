@@ -115,8 +115,9 @@ hmn: 24 GPU processes found (18.1 GiB committed total); device 0 spilling: 212 M
 
 The SPILL column (since v0.2.11) is a *single-snapshot* approximation of this
 same co-condition — no baseline to measure growth against, so it applies an
-absolute floor instead: the adapter is spilling once it is saturated with
-shared residency above 256 MiB. Since v0.2.13 that device verdict is stated
+absolute floor instead: the adapter is spilling once its dedicated
+residency is at or above 85% of capacity and its shared residency at or
+above 256 MiB. Since v0.2.13 that device verdict is stated
 once, on the summary line, rather than repeated on every row: `python.exe`,
 whose own 2.9 GiB of shared residency clears the same 256 MiB floor, reads
 `PAGED`; `firefox.exe`, whose 25 MiB is the benign baseline, reads `device` —

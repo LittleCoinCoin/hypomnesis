@@ -68,11 +68,13 @@ Three things specific to `watch`:
   or `--follow-new` combined with an explicit PID) — designed for a
   watchdog script to check directly
   (`hmn watch 21844 --duration 5m; [ $? -eq 1 ] && alert`), no JSON parsing
-  needed for the common case.
-- **A `0 B` row isn't necessarily "exited."** `hmn watch` can't tell "PID
+  needed for the common case. Where spill is not measurable (Linux, macOS),
+  `0` also means "not measured": read `measurable` from `--json` first.
+- **A `0 MiB` row isn't necessarily "exited."** `hmn watch` can't tell "PID
   exited" from "PID alive, holds no GPU memory right now" apart, and doesn't
   try to — it renders zero either way and does not auto-stop. Use
-  `--duration` or Ctrl+C.
+  `--duration` or Ctrl+C. At attach, though, an explicit PID that names no
+  running process at all (a typo) gets a one-line warning (since v0.2.13).
 
 ## Why doesn't `hmn watch` show processes that start after I attach?
 

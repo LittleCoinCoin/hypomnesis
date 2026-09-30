@@ -727,10 +727,7 @@ pub(super) fn process_exists(pid: u32) -> Option<bool> {
     if len > 0 {
         return Some(true);
     }
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(ESRCH) => Some(false),
-        _ => None,
-    }
+    (std::io::Error::last_os_error().raw_os_error() == Some(ESRCH)).then_some(false)
 }
 
 /// Resolve `pid`'s executable basename via `proc_pidpath`.

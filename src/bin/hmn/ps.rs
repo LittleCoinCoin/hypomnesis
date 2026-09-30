@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `hmn ps`: the GPU-process listing — its row model, sort keys and
-//! comparator, the stderr summary line, and its text and JSON renderers.
+//! `hmn ps`: the GPU-process listing — its row model, filters
+//! (`PsFilters`), sort keys and comparator, the paged-process mark, the
+//! stderr summary line, and its text and JSON renderers.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -111,7 +112,7 @@ pub const fn is_paged(shared_used_bytes: u64) -> bool {
 /// shared bytes over every process. Both `None` when `spilling` is — the
 /// same "can't tell" the broadcast verdict carries.
 #[must_use]
-pub fn paged_and_share(
+pub const fn paged_and_share(
     spilling: Option<bool>,
     shared_used_bytes: u64,
     device_shared_bytes: u64,
@@ -289,16 +290,27 @@ impl PsFilters {
     }
 }
 
-/// The name a `--filter` pattern can be matched against: `name`, unless it
-/// is not a real name — absent, the Windows-only `[protected]` / `[exited]`
-/// brackets (unresolved, just with more detail), or the `nvidia-smi`
-/// fallback's literal `?`. `[kernel]` (`PID 4`) is a real, stable name
-/// and passes. The one rule behind `hmn ps --filter` and
-/// `watch::matchable_name` (which adds a last-resolved fallback), so the
-/// two filters cannot disagree about what can be matched.
+/// Filter out `name` values that don't represent a genuinely resolved
+/// process identity for `hmn watch`'s PID-reuse comparison (`watch::process_sample`):
+/// `None` (unresolved) and the Windows-only `"[protected]"`/`"[exited]"`
+/// synthetic brackets (still unresolved, just with more detail than a
+/// bare `?`). `"[kernel]"` is deliberately *not* filtered — `PID 4` is
+/// permanently the kernel and never flickers, so it is safe to treat as
+/// a stable, comparable name.
+#[must_use]
+pub fn resolved_name(name: Option<&str>) -> Option<&str> {
+    name.filter(|n| *n != "[protected]" && *n != "[exited]")
+}
+
+/// The name a `--filter` pattern can be matched against: a
+/// [`resolved_name`] that is not the `nvidia-smi` fallback's literal `?`.
+/// `[kernel]` (`PID 4`) is a real, stable name and passes. The one rule
+/// behind `hmn ps --filter` and `watch::matchable_name` (which adds a
+/// last-resolved fallback), so the two filters cannot disagree about what
+/// can be matched.
 #[must_use]
 pub fn filterable_name(name: Option<&str>) -> Option<&str> {
-    name.filter(|n| !matches!(*n, "[protected]" | "[exited]" | "?"))
+    resolved_name(name).filter(|n| *n != "?")
 }
 
 /// Whether `name` contains any of `patterns`, ignoring case — the
@@ -361,7 +373,7 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         // starts or stops spilling in that gap would show a SHARED
         // figure and a SPILL verdict from two different moments. This
         // does mean the PDH open+sample below still runs even for a
-        // device every row of which the --pid/--min filters end up
+        // device every row of which the --pid/--min/--filter filters end up
         // dropping; that's the accepted trade (measured negligible on
         // the reference machine — see CHANGELOG) for not straddling
         // gpu_processes()'s own call duration, the same call-ordering
@@ -449,9 +461,12 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
-/// `<N> GPU process[es] found[ matching <filters>][ (<X.Y> <unit> committed total[; <M> protected — re-run elevated for names][; <K> unnamed not matched])][; device <D> spilling: [<F> free, ]<S> shared, <P> process[es] paged]….`
+/// `<N> GPU process[es] found[ matching <filters>][ (<parts>)][; device <D> spilling: [<F> free, ]<S> shared, <P> process[es] paged]….`,
+/// where `<parts>` joins, with `; `, whichever of `<X.Y> <unit> committed
+/// total`, `<M> protected — re-run elevated for names` and `<K> unnamed not
+/// matched` apply.
 ///
-/// Two appendices after the noun, each elided when not applicable:
+/// Three appendices after the noun, each elided when not applicable:
 ///
 /// - **Filter clause** (` matching pid=N device=M min=X unit filter="a"`):
 ///   appended only when at least one filter is active, as
@@ -638,9 +653,8 @@ fn format_ps_json(rows: &[PsRow]) -> String {
         let device_name_json = json_string_or_null(row.device_name.as_deref());
         let spilling_json = json_value_or_null(row.spilling);
         let paged_json = json_value_or_null(row.paged);
-        let share_json = row
-            .shared_share
-            .map_or_else(|| "null".to_owned(), |f| format!("{f:.4}"));
+        // Pre-formatted: a float's own `Display` could print `NaN`/`inf`.
+        let share_json = json_value_or_null(row.shared_share.map(|f| format!("{f:.4}")));
         let _ = write!(
             out,
             r#"{{"pid":{},"name":{name_json},"used_bytes":{},"shared_used_bytes":{},"device_index":{},"device_name":{device_name_json},"spilling":{spilling_json},"paged":{paged_json},"shared_share":{share_json}}}"#,
@@ -791,6 +805,31 @@ mod tests {
         assert!(matches_any("figure13_newline_patch.exe", &pats));
         assert!(matches_any("PYTHON.EXE", &pats));
         assert!(!matches_any("dwm.exe", &pats));
+    }
+
+    // --- resolved_name (PID-reuse comparison filter) ---
+
+    #[test]
+    fn resolved_name_passes_through_real_names() {
+        assert_eq!(resolved_name(Some("python.exe")), Some("python.exe"));
+    }
+
+    #[test]
+    fn resolved_name_passes_through_kernel_bracket() {
+        // [kernel] (PID 4) is permanently stable and never flickers —
+        // safe to treat as a comparable name, unlike [protected]/[exited].
+        assert_eq!(resolved_name(Some("[kernel]")), Some("[kernel]"));
+    }
+
+    #[test]
+    fn resolved_name_filters_protected_and_exited_brackets() {
+        assert_eq!(resolved_name(Some("[protected]")), None);
+        assert_eq!(resolved_name(Some("[exited]")), None);
+    }
+
+    #[test]
+    fn resolved_name_filters_none() {
+        assert_eq!(resolved_name(None), None);
     }
 
     #[test]

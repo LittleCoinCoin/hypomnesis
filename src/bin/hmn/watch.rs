@@ -18,7 +18,9 @@ use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
     json_string, json_string_or_null, json_value_or_null, spill_cell,
 };
-use crate::ps::{PsRow, SortKey, filterable_name, footprint_bytes, matches_any, ps_row_comparator};
+use crate::ps::{
+    PsRow, SortKey, filterable_name, footprint_bytes, matches_any, ps_row_comparator, resolved_name,
+};
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
 
 /// Minimum unresolved-PID cumulative growth (bytes, either committed or
@@ -229,18 +231,6 @@ fn sleep_interruptibly(total: Duration, interrupted: &AtomicBool) {
     }
 }
 
-/// Filter out `name` values that don't represent a genuinely resolved
-/// process identity for [`process_sample`]'s PID-reuse comparison:
-/// `None` (unresolved) and the Windows-only `"[protected]"`/`"[exited]"`
-/// synthetic brackets (still unresolved, just with more detail than a
-/// bare `?`). `"[kernel]"` is deliberately *not* filtered — `PID 4` is
-/// permanently the kernel and never flickers, so it is safe to treat as
-/// a stable, comparable name.
-#[must_use]
-fn resolved_name(name: Option<&str>) -> Option<&str> {
-    name.filter(|n| *n != "[protected]" && *n != "[exited]")
-}
-
 /// Fold one sample into `state`, observe the spill tracker, and return
 /// one rendered [`WatchSampleRow`] per watched PID (in `watched`'s
 /// order). A watched PID absent from `rows` renders as `0 B` / `0 B` for
@@ -364,11 +354,11 @@ fn process_sample(
 }
 
 /// Format one interval's rows as a text table (no header — the caller
-/// prints the column header once up front). Column widths are computed
-/// per call from that interval's own cells, like `ps::format_ps_table`;
-/// consecutive intervals may re-align slightly as values change width,
-/// an acceptable trade-off for a continuously-appended stream (`--json`
-/// is the stable-shape option for scripts).
+/// prints the column header once up front). Each column is at least its
+/// [`WATCH_COLUMNS`] minimum width, the header's own, so rows line up under
+/// the header printed once; a wider cell (a name longer than 12
+/// characters, a 7-digit PID) still widens its column for that interval
+/// (`--json` is the stable-shape option for scripts).
 fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String {
     let mut table = watch_table();
     for r in rows {
@@ -656,7 +646,8 @@ impl Selection {
             };
         }
         let mut unmatchable = Vec::new();
-        // device_index / device_name / spilling / paged / shared_share are unused by
+        // device_index / device_name / spilling / paged / shared_share are
+        // unused by
         // SortKey::Dedicated's comparator (pid / used_bytes / name only) —
         // defaulted rather than threaded through from the caller, which has
         // no device-name or live-spill context of its own to give.
@@ -1650,31 +1641,6 @@ mod tests {
         let rows1 = vec![entry(100, Some("[exited]"), grown, 0)];
         let _ = process_sample(&rows1, &mut state, &[100], Duration::from_secs(5), None);
         assert!(!state.by_pid.get(&100).unwrap().growth_hint_fired);
-    }
-
-    // --- resolved_name (PID-reuse comparison filter) ---
-
-    #[test]
-    fn resolved_name_passes_through_real_names() {
-        assert_eq!(resolved_name(Some("python.exe")), Some("python.exe"));
-    }
-
-    #[test]
-    fn resolved_name_passes_through_kernel_bracket() {
-        // [kernel] (PID 4) is permanently stable and never flickers —
-        // safe to treat as a comparable name, unlike [protected]/[exited].
-        assert_eq!(resolved_name(Some("[kernel]")), Some("[kernel]"));
-    }
-
-    #[test]
-    fn resolved_name_filters_protected_and_exited_brackets() {
-        assert_eq!(resolved_name(Some("[protected]")), None);
-        assert_eq!(resolved_name(Some("[exited]")), None);
-    }
-
-    #[test]
-    fn resolved_name_filters_none() {
-        assert_eq!(resolved_name(None), None);
     }
 
     // --- WatchState::track (--follow-new seen_order bookkeeping) ---

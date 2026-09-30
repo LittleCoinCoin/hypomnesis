@@ -141,7 +141,40 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
 
 ## Consistency pass
 
-To be run with fresh eyes after the last commit.
+After the last item, a fresh agent that had not seen the work reviewed `c66cc87..HEAD` against
+`CONVENTIONS.md`, for correctness and for doc drift. It found no functional bug; it re-ran clippy
+for Windows, Linux and macOS and the tests, and checked the new behaviour live. Its findings,
+fixed in one commit:
+
+- **A test-module allow that suppressed nothing** (`src/gpu/mod.rs`, `unwrap_used`) — removed, as
+  `CONVENTIONS.md`'s test-module rule requires.
+- **Doc drift in the code:** `format_watch_rows_text` still said its widths came from each
+  interval's own cells; `format_ps_summary` said "two appendices" and nested the unnamed count
+  inside the committed total; the `ps.rs` module doc and a comment omitted `--filter`, the paged
+  mark and `PsFilters`.
+- **Doc drift in the docs:** the FAQ's `hmn watch` bullets lacked the nonexistent-PID warning and
+  the "exit `0` also means not measured" caveat; the README said an absent PID renders `0 B`
+  where its cells read `0 MiB`; the spill tutorial's rewritten Step 3 merged the two spill
+  conditions into one; the README's JSON sentence was hard to parse.
+- **One spelling:** `shared_share` now goes through `json_value_or_null`, whose doc names it, like
+  every other optional JSON value; `resolved_name` moved to `ps.rs`, and `filterable_name` is now
+  defined from it, so the unresolved-name brackets are listed once for both filters.
+- **Idiom:** `process_exists`'s no-source arm uses the sibling dispatchers'
+  `#[allow(unused_variables)]` rather than `let _ = pid` under `EXPLICIT`; the macOS `ESRCH` test
+  is a comparison rather than a two-arm `match`; `paged_and_share` is a `const fn` (it compiles on
+  MSRV 1.88, which clippy had not flagged).
+
+After the fixes, the full gate set passed again on Windows (stable) and Ubuntu WSL2 (stable and
+1.88), and clippy for macOS (stable and 1.88).
+
+Left as they are, and why:
+
+- **Rows wider than a column still drift, for that interval.** The minimum widths are the old
+  header's (`NAME` 12, `PID` 6), which keeps the header byte-identical; a 13-character-plus name
+  (`spillforge.exe`) or a 7-digit Linux PID widens its column. Widening the minimums changes the
+  header; left for the maintainer's call.
+- **`PsFilters::new` and `Selection::new` each deduplicate PIDs in the same two lines.** A shared
+  helper for two call sites was judged not worth it.
 
 ---
 
