@@ -59,7 +59,7 @@ pub mod spill;
 pub mod report;
 
 pub use error::{HypomnesisError, Result};
-pub use gpu::{device_count, device_info, gpu_processes, process_gpu_info};
+pub use gpu::{device_count, device_info, gpu_processes, process_exists, process_gpu_info};
 pub use ram::process_rss;
 pub use snapshot::{GpuDeviceInfo, GpuProcessEntry, GpuQuerySource, ProcessGpuInfo, Snapshot};
 pub use spill::{

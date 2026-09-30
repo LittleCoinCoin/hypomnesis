@@ -6,7 +6,9 @@
 //! feature; the dispatchers below try them in priority order and surface
 //! the first success. Backend modules are crate-private — public access
 //! is via the four dispatchers ([`device_count`], [`device_info`],
-//! [`process_gpu_info`], [`gpu_processes`]).
+//! [`process_gpu_info`], [`gpu_processes`]), plus [`process_exists`]
+//! (since v0.2.13), which reuses the Windows and macOS backends' process
+//! lookups to answer whether a PID names a running process at all.
 
 use crate::{GpuDeviceInfo, GpuProcessEntry, HypomnesisError, ProcessGpuInfo, Result};
 
@@ -455,6 +457,74 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
     Err(HypomnesisError::NoGpuSource)
 }
 
+/// Whether a process with this PID exists right now, as far as this
+/// platform can tell the caller.
+///
+/// `Some(true)` or `Some(false)` when the platform can answer; `None` when
+/// it cannot, which a caller must treat as "don't know", never as "no".
+/// The answer is a snapshot: a process can start or exit, and a PID can
+/// be reused, the moment after it is taken. Never errors.
+///
+/// | Platform | Source | `None` when |
+/// |---|---|---|
+/// | Linux | `/proc/<pid>/status`, whose `Tgid` must equal `pid` (so a thread ID is not taken for a process) | the file exists but cannot be read |
+/// | Windows (`pdh` feature) | a `Toolhelp32` process snapshot, the same one `gpu_processes` uses to name processes `OpenProcess` cannot | the snapshot cannot be taken |
+/// | macOS (`metal` feature) | `proc_pidpath`; `ESRCH` means no such process | `proc_pidpath` fails for another reason (e.g. `EPERM`), or `pid` exceeds `i32::MAX` |
+/// | anything else | — | always |
+///
+/// On Linux a process hidden from the caller (a `/proc` mounted with
+/// `hidepid`) reads as `Some(false)`, indistinguishable from one that does
+/// not exist.
+///
+/// Added in v0.2.13 for `hmn watch`, which warns when a PID given on its
+/// command line names no process, rather than watching it silently as
+/// `0` bytes.
+#[must_use]
+#[allow(clippy::missing_const_for_fn)] // const only on platforms whose arm is `None`
+pub fn process_exists(pid: u32) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string(format!("/proc/{pid}/status")) {
+            // A status without a parsable `Tgid` is still a process.
+            Ok(status) => Some(status_tgid(&status).is_none_or(|tgid| tgid == pid)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+            Err(_) => None,
+        }
+    }
+    #[cfg(all(windows, feature = "pdh"))]
+    {
+        pdh::resolve_names_via_snapshot(&[pid]).map(|found| !found.is_empty())
+    }
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    {
+        metal::process_exists(pid)
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        all(windows, feature = "pdh"),
+        all(target_os = "macos", feature = "metal")
+    )))]
+    {
+        // EXPLICIT: no process-lookup source on this platform / feature
+        // set — "don't know", never "no".
+        let _ = pid;
+        None
+    }
+}
+
+/// The `Tgid` (thread-group ID, the process's PID) field of a Linux
+/// `/proc/<pid>/status` text; `None` when absent or malformed. For a
+/// thread's `/proc/<tid>/status` it names the owning process, which
+/// differs from `tid`.
+#[cfg(any(target_os = "linux", test))]
+#[must_use]
+fn status_tgid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Tgid:"))
+        .and_then(|rest| rest.trim().parse().ok())
+}
+
 /// Sort [`gpu_processes`] output by `pid` ascending.
 ///
 /// Deterministic across calls — the same input state produces the
@@ -551,4 +621,40 @@ fn bounds_check(index: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_tgid_reads_the_field() {
+        let status = "Name:\tcanvas\nUmask:\t0022\nState:\tR (running)\nTgid:\t15534\nNgid:\t0\nPid:\t15534\n";
+        assert_eq!(status_tgid(status), Some(15534));
+        assert_eq!(status_tgid("Name:\tx\nPid:\t1\n"), None);
+        assert_eq!(status_tgid("Tgid:\tbogus\n"), None);
+    }
+
+    #[test]
+    fn process_exists_finds_this_process() {
+        // `None` is allowed only where the platform cannot answer at all.
+        let me = std::process::id();
+        if let Some(exists) = process_exists(me) {
+            assert!(exists);
+        }
+        #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
+        assert_eq!(process_exists(me), Some(true));
+    }
+
+    #[test]
+    fn process_exists_does_not_find_an_impossible_pid() {
+        // Above every platform's PID ceiling: Linux's `pid_max` is at most
+        // 2^22, Windows PIDs are multiples of 4 well below 2^32, and on
+        // macOS `u32::MAX` exceeds `i32::MAX` (so `None` there).
+        let impossible = u32::MAX - 2;
+        assert_ne!(process_exists(impossible), Some(true));
+        #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
+        assert_eq!(process_exists(impossible), Some(false));
+    }
 }

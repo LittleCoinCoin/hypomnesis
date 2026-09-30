@@ -197,3 +197,10 @@ fn gpu_processes_returns_result_or_no_gpu_source() {
         }
     }
 }
+
+#[test]
+fn process_exists_is_reachable_and_never_denies_this_process() {
+    // `None` ("can't tell") is allowed where no lookup source is compiled
+    // in; `Some(false)` for the test process itself never is.
+    assert_ne!(hypomnesis::process_exists(std::process::id()), Some(false));
+}

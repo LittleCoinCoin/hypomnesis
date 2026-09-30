@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   third verdict). Live-validated on the RTX 5060 Ti with `tools/spillforge`: `spillforge.exe`
   at 423 MiB shared read `PAGED`, every other row `device`. Same report, request 2.
 
+- **`hypomnesis::process_exists(pid) -> Option<bool>`** (`src/gpu/mod.rs`, `src/gpu/metal.rs`) —
+  whether a PID names a running process, `None` when the platform cannot tell (never "no" by
+  default). Linux reads `/proc/<pid>/status` and requires its `Tgid` to equal `pid`, so a thread
+  ID is not taken for a process; Windows reuses the `Toolhelp32` snapshot `gpu_processes`
+  already takes to name processes (`pdh` feature, no new `unsafe`); macOS calls `proc_pidpath`,
+  where `ESRCH` means no such process (`metal` feature). Added for `hmn watch`'s warning about a
+  nonexistent explicit PID. Same report, observation 1.
+
 ### Changed
 
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`

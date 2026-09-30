@@ -144,6 +144,11 @@ const PROC_ALL_PIDS: u32 = 1;
 /// `proc_pidpath`. `4 * MAXPATHLEN` from `<sys/proc_info.h>`.
 const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
 
+/// `ESRCH` from `<errno.h>`: no process with this PID — how
+/// `proc_pidpath` says a PID names nothing, as opposed to a process it
+/// may not inspect (`EPERM`).
+const ESRCH: i32 = 3;
+
 /// `ledger_template_info` from XNU `osfmk/kern/ledger.h`.
 ///
 /// One row per ledger entry, returned in an array by
@@ -700,6 +705,32 @@ pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::Gpu
     }
 
     Some(out)
+}
+
+/// Whether `pid` names a running process, via `proc_pidpath`: a path
+/// means yes, `ESRCH` means no, anything else (e.g. `EPERM`) is `None`,
+/// "can't tell". `None` too for a `pid` past `i32::MAX`, which no macOS
+/// PID reaches. Backs [`crate::gpu::process_exists`] on macOS.
+#[allow(unsafe_code)]
+pub(super) fn process_exists(pid: u32) -> Option<bool> {
+    let pid = i32::try_from(pid).ok()?;
+    let mut buf: [u8; PROC_PIDPATHINFO_MAXSIZE] = [0; PROC_PIDPATHINFO_MAXSIZE];
+    // CAST: usize → u32, `PROC_PIDPATHINFO_MAXSIZE` is 4096; fits.
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let cap_u32 = PROC_PIDPATHINFO_MAXSIZE as u32;
+    // SAFETY: `buf.as_mut_ptr` is valid for `PROC_PIDPATHINFO_MAXSIZE`
+    // bytes (its declared length), and `cap_u32` tells the kernel so. It
+    // writes at most that many bytes and returns the length, or 0 with
+    // `errno` set; PID validity is the kernel's to judge.
+    let len =
+        unsafe { libsystem_ffi::proc_pidpath(pid, buf.as_mut_ptr().cast::<c_void>(), cap_u32) };
+    if len > 0 {
+        return Some(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(ESRCH) => Some(false),
+        _ => None,
+    }
 }
 
 /// Resolve `pid`'s executable basename via `proc_pidpath`.
