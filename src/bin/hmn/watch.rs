@@ -354,13 +354,14 @@ fn process_sample(
 }
 
 /// Format one interval's rows as a text table (no header — the caller
-/// prints the column header once up front). Each column is at least its
-/// [`WATCH_COLUMNS`] minimum width, the header's own, so rows line up under
-/// the header printed once; a wider cell (a name longer than 12
-/// characters, a 7-digit PID) still widens its column for that interval
-/// (`--json` is the stable-shape option for scripts).
-fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String {
-    let mut table = watch_table();
+/// prints the column header once up front). Columns are at least the
+/// header's widths ([`watch_table`] with the same `name_width`), so rows
+/// line up under the header printed once. Only a cell wider than that —
+/// under `--follow-new`, a longer name entering after attach — widens its
+/// column, for that interval alone (`--json` is the stable-shape option
+/// for scripts).
+fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow], name_width: usize) -> String {
+    let mut table = watch_table(name_width);
     for r in rows {
         table.push_row(vec![
             r.pid.to_string(),
@@ -382,8 +383,10 @@ fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String 
 /// The text-mode column set: headers, and the minimum width of each, which
 /// the header line always has and each interval's rows keep unless a cell
 /// is wider — so rows line up under a header printed once, before the loop.
+/// `PID` fits 7 digits (Linux's default `pid_max` is 4 194 304); `NAME`'s
+/// 12 is a floor that [`watch_name_width`] raises to the watched names.
 const WATCH_COLUMNS: [(&str, usize); 7] = [
-    ("PID", 6),
+    ("PID", 7),
     ("NAME", 12),
     ("COMMITTED", 9),
     ("\u{394}COMMIT", 9),
@@ -395,19 +398,43 @@ const WATCH_COLUMNS: [(&str, usize); 7] = [
 /// Width of the `TIME` column, the rows' prefix (`+12.5s`).
 const WATCH_TIME_WIDTH: usize = 8;
 
-/// An empty table over [`WATCH_COLUMNS`]: the one source of the header
-/// line and of every interval's rows, so the two cannot drift apart.
+/// An empty table over [`WATCH_COLUMNS`], its `NAME` column at least
+/// `name_width` wide: the one source of the header line and of every
+/// interval's rows, so the two cannot drift apart.
 #[must_use]
-fn watch_table() -> Table {
+fn watch_table(name_width: usize) -> Table {
     let headers: Vec<&'static str> = WATCH_COLUMNS.iter().map(|&(h, _)| h).collect();
-    let widths: Vec<usize> = WATCH_COLUMNS.iter().map(|&(_, w)| w).collect();
+    let widths: Vec<usize> = WATCH_COLUMNS
+        .iter()
+        .map(|&(h, w)| if h == "NAME" { w.max(name_width) } else { w })
+        .collect();
     Table::new(&headers).with_min_widths(&widths)
 }
 
+/// The `NAME` column width for this watch: the longest name among the
+/// `watched` PIDs in the attach-time listing `rows`, as the table measures
+/// widths (bytes), so the header printed once fits every name it will
+/// head. The [`WATCH_COLUMNS`] floor applies on top. An unresolved or
+/// absent PID contributes the `?` it renders as. Names are never cut: a
+/// name is the process's identity, and what `--filter` matches.
+#[must_use]
+fn watch_name_width(rows: &[GpuProcessEntry], watched: &[u32]) -> usize {
+    watched
+        .iter()
+        .map(|pid| {
+            rows.iter()
+                .find(|e| e.pid == *pid)
+                .and_then(|e| e.name.as_deref())
+                .map_or(1, str::len)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Format the watch column header line (text mode), printed once before
-/// the loop starts.
-fn format_watch_header_text() -> String {
-    watch_table().render(Some(&format!("{:<WATCH_TIME_WIDTH$}  ", "TIME")), "")
+/// the loop starts, with its `NAME` column at least `name_width` wide.
+fn format_watch_header_text(name_width: usize) -> String {
+    watch_table(name_width).render(Some(&format!("{:<WATCH_TIME_WIDTH$}  ", "TIME")), "")
 }
 
 /// Format one interval's rows as JSON Lines: one `"kind":"sample"`
@@ -995,6 +1022,9 @@ pub fn run_watch(
     let mut announced = HashSet::new();
     let first = selection.select(&first_rows, &state);
     let mut watched = first.pids;
+    // Sized once, from the processes watched at attach, so the header and
+    // every interval's rows share one NAME width.
+    let name_width = watch_name_width(&first_rows, &watched);
     if watched.is_empty() {
         let top = selection.top;
         let criterion = selection.criterion();
@@ -1051,7 +1081,7 @@ pub fn run_watch(
             )
         );
     } else {
-        print!("{}", format_watch_header_text());
+        print!("{}", format_watch_header_text(name_width));
     }
     for notice in missing_pid_notices(&selection.explicit, &first_rows, process_exists) {
         eprintln!("{notice}");
@@ -1073,7 +1103,10 @@ pub fn run_watch(
             format_watch_rows_json(Duration::ZERO, first_wall_clock, &rows0)
         );
     } else {
-        print!("{}", format_watch_rows_text(Duration::ZERO, &rows0));
+        print!(
+            "{}",
+            format_watch_rows_text(Duration::ZERO, &rows0, name_width)
+        );
     }
 
     'watch: loop {
@@ -1122,7 +1155,7 @@ pub fn run_watch(
         if json {
             print!("{}", format_watch_rows_json(elapsed, wall_clock, &sample));
         } else {
-            print!("{}", format_watch_rows_text(elapsed, &sample));
+            print!("{}", format_watch_rows_text(elapsed, &sample, name_width));
         }
     }
 
@@ -1292,7 +1325,7 @@ mod tests {
 
     #[test]
     fn format_watch_header_text_has_expected_columns() {
-        let h = format_watch_header_text();
+        let h = format_watch_header_text(0);
         assert!(h.contains("TIME"));
         assert!(h.contains("PID"));
         assert!(h.contains("NAME"));
@@ -1302,29 +1335,52 @@ mod tests {
     }
 
     #[test]
-    fn format_watch_header_text_is_unchanged() {
-        // Byte-identical to the fixed-width header v0.2.6-v0.2.12 printed.
+    fn format_watch_header_text_widths() {
+        // v0.2.6-v0.2.12's header with `PID` one wider, for 7-digit PIDs.
         assert_eq!(
-            format_watch_header_text(),
-            "TIME      PID     NAME          COMMITTED  \u{394}COMMIT    SHARED     \u{394}SHARED    SPILL\n"
+            format_watch_header_text(0),
+            "TIME      PID      NAME          COMMITTED  \u{394}COMMIT    SHARED     \u{394}SHARED    SPILL\n"
         );
+        // `NAME` grows to a longer watched name, never shrinks below 12.
+        assert!(
+            format_watch_header_text(18)
+                .starts_with("TIME      PID      NAME                COMMITTED  ")
+        );
+        assert_eq!(format_watch_header_text(5), format_watch_header_text(0));
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn watch_name_width_is_the_longest_watched_name() {
+        let rows = [
+            entry(1, Some("spillforge.exe"), 0, 0),
+            entry(2, Some("msedgewebview2.exe"), 0, 0),
+            entry(3, None, 0, 0),
+        ];
+        // Only watched PIDs count; 2 is not watched.
+        assert_eq!(watch_name_width(&rows, &[1, 3]), 14);
+        // Unresolved (`None`) and absent PIDs render as `?`.
+        assert_eq!(watch_name_width(&rows, &[3, 99]), 1);
+        assert_eq!(watch_name_width(&rows, &[]), 0);
     }
 
     #[test]
     fn format_watch_rows_text_lines_up_under_the_header() {
-        // The askesis report's row: a name and cells narrower than the
-        // header, which drifted left of their columns before v0.2.13.
-        let header = format_watch_header_text();
-        let r = watch_row(
-            15534,
-            Some("canvas"),
-            16 * 1024 * 1024 * 1024,
-            0,
-            0,
-            0,
-            false,
-        );
-        let rows = format_watch_rows_text(Duration::ZERO, &[r]);
+        // The askesis report's row (a name and cells narrower than the
+        // header), and a name and PID wider than the old fixed widths
+        // (`spillforge.exe`, a 7-digit Linux PID): both drifted off their
+        // columns before v0.2.13.
+        for (pid, name) in [(15534, "canvas"), (4_194_303, "spillforge.exe")] {
+            let name_width = name.len();
+            let header = format_watch_header_text(name_width);
+            let r = watch_row(pid, Some(name), 16 * 1024 * 1024 * 1024, 0, 0, 0, false);
+            let rows = format_watch_rows_text(Duration::ZERO, &[r], name_width);
+            assert_columns_line_up(&header, &rows);
+        }
+    }
+
+    /// Assert every column of `header` starts a word in `rows` too.
+    fn assert_columns_line_up(header: &str, rows: &str) {
         // Where each word starts, in characters (the header's delta
         // columns begin with a two-byte `Δ`). Cells hold spaces of their
         // own (`16.0 GiB`), so a row has more word starts than the header;
@@ -1337,8 +1393,8 @@ mod tests {
                 .map(|((i, _), _)| i)
                 .collect()
         };
-        let row_starts = starts(&rows);
-        for column in starts(&header) {
+        let row_starts = starts(rows);
+        for column in starts(header) {
             assert!(row_starts.contains(&column), "{header}{rows}");
         }
     }
@@ -1354,7 +1410,7 @@ mod tests {
             0,
             false,
         );
-        let s = format_watch_rows_text(Duration::from_secs(5), &[r]);
+        let s = format_watch_rows_text(Duration::from_secs(5), &[r], 0);
         assert!(s.starts_with("+5.0s"));
         assert!(s.contains("12345"));
         assert!(s.contains("python.exe"));
@@ -1375,7 +1431,7 @@ mod tests {
             576 * 1024 * 1024,
             true,
         );
-        let s = format_watch_rows_text(Duration::from_secs(10), &[r]);
+        let s = format_watch_rows_text(Duration::from_secs(10), &[r], 0);
         assert!(s.contains("+700 MiB"));
         assert!(s.contains("+576 MiB"));
         assert!(s.contains("SPILL"));
@@ -1387,7 +1443,7 @@ mod tests {
         // render distinctly from Some(false) ("no") — same "?, never
         // no" convention `hmn ps`'s SPILL column uses.
         let r = watch_row_opt(1, Some("py.exe"), 0, 0, 0, 0, None);
-        let s = format_watch_rows_text(Duration::ZERO, &[r]);
+        let s = format_watch_rows_text(Duration::ZERO, &[r], 0);
         assert!(s.contains('?'));
         assert!(!s.contains("no"));
     }
@@ -1395,7 +1451,7 @@ mod tests {
     #[test]
     fn format_watch_rows_text_missing_name_renders_question_mark() {
         let r = watch_row(99, None, 0, 0, 0, 0, false);
-        let s = format_watch_rows_text(Duration::ZERO, &[r]);
+        let s = format_watch_rows_text(Duration::ZERO, &[r], 0);
         assert!(s.contains("99"));
         assert!(s.contains('?'));
     }

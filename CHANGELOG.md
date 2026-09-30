@@ -82,10 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`hmn watch`'s text rows line up under the column header** (`src/bin/hmn/watch.rs`,
   `format.rs`) — the header was printed once with fixed widths, while each interval's rows were
   sized to that interval's own cells, so a short name such as `canvas` pulled every later column
-  left of its heading. `Table` gains minimum column widths, and one `watch_table()` builds both
-  the header line (byte-identical to before) and every interval's rows from the same width list.
-  A cell wider than its column still widens it. Present since v0.2.6, on every platform. Same
-  report, observation 2.
+  left of its heading, and a long one such as `spillforge.exe` pushed them right. `Table` gains
+  minimum column widths, and one `watch_table()` builds both the header line and every
+  interval's rows from the same widths: `PID` now fits 7 digits (Linux's default `pid_max` is
+  4 194 304), and `NAME` is as wide as the longest name watched at attach, 12 at least. Names
+  are never cut. Only under `--follow-new` can a longer name enter later, widening its column for
+  that interval. With short names the header differs from before only by one space after `PID`.
+  Present since v0.2.6, on every platform. Same report, observation 2.
 - **`hmn ps --device <N>` with an index it cannot list is an error** (`src/bin/hmn/ps.rs`,
   `main.rs`) — `hmn ps --device 3` on a one-GPU machine exited `0` with an empty table and
   `0 GPU processes found matching device=3.`, so a mistyped index read as an idle card, while

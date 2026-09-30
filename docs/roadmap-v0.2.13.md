@@ -169,12 +169,21 @@ After the fixes, the full gate set passed again on Windows (stable) and Ubuntu W
 
 Left as they are, and why:
 
-- **Rows wider than a column still drift, for that interval.** The minimum widths are the old
-  header's (`NAME` 12, `PID` 6), which keeps the header byte-identical; a 13-character-plus name
-  (`spillforge.exe`) or a 7-digit Linux PID widens its column. Widening the minimums changes the
-  header; left for the maintainer's call.
 - **`PsFilters::new` and `Selection::new` each deduplicate PIDs in the same two lines.** A shared
   helper for two call sites was judged not worth it.
+
+### Found after the consistency pass
+
+- **Rows wider than a column still drifted, for that interval.** The review noted that item 10's
+  minimum widths were the old header's (`NAME` 12, `PID` 6), kept so the header stayed
+  byte-identical: a 13-character-plus name (`spillforge.exe`, `msedgewebview2.exe`) or a 7-digit
+  Linux PID still pushed its row off the header. The maintainer chose to fix it rather than keep
+  the header: `PID` now fits 7 digits, and `NAME` is sized once at attach to the longest watched
+  name (12 at least), for the header and every interval's rows alike. No fixed width would do —
+  Linux names are no longer cut at 15 bytes since v0.2.12 — and names are never truncated, since a
+  name is what `--filter` matches. Only a longer name entering under `--follow-new` widens its
+  column, for that interval. Live: `hmn watch <spillforge> <dwm>` lines up under a 14-wide `NAME`.
+  Both alignment tests fail with the sizing disabled.
 
 ---
 
@@ -183,6 +192,8 @@ Left as they are, and why:
 - `Cargo.toml` bumped to `0.2.13`; this roadmap's status and the dogfooding report's `Status`
   flipped, per the dogfooding style guide.
 - The README's "what's new" banner rotated: 🆕 `0.2.13`, `0.2.12` to 🚀, `0.2.10` dropped.
+- The `hmn watch` transcripts in `docs/tutorials/watching-a-running-job.md` and the README
+  re-captured from the `0.2.13` build, so they show the aligned columns.
 
 ---
 
