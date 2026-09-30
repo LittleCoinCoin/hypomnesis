@@ -98,9 +98,12 @@ mod watch;
                   count, or a decimal number with KiB/MiB/GiB. Prints one \
                   line to stderr either way; no --json — the point is a scriptable exit code, not \
                   structured output. Gateable from a run script instead of a hand-rolled \
-                  `hmn --json | jq` check before every launch.\n\
-                  \n\
-                  Limitations (per-platform):\n\
+                  `hmn --json | jq` check before every launch.",
+    // The per-platform Limitations follow the command list rather than
+    // precede it: in `long_about` they pushed the commands several screens
+    // down. `-h` names where they are.
+    after_help = "Per-platform limitations are listed at the end of `hmn --help`.",
+    after_long_help = "Limitations (per-platform):\n\
                   - Linux / NVML backend is compute-only — only processes with an active CUDA \
                   context appear. Browsers using GPU compositing, games, and pure-graphics \
                   apps do not.\n\

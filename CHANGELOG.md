@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`hmn --help` lists its commands before the per-platform Limitations** (`src/bin/hmn/main.rs`)
+  — the Limitations, most of the text, moved from clap's `long_about` to `after_long_help`, so
+  the command list is no longer several screens down; `hmn -h` gains a line saying where they
+  are. No text was removed: sorted, the old and new `--help` outputs are line-for-line equal.
+  Same report, observation 3.
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`
   refactor gated on a fourth `ps` filter being requested, which `--filter` is. It decides which
   rows are listed and words the summary's `matching …` clause, so the two cannot disagree.

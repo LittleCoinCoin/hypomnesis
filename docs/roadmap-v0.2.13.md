@@ -89,7 +89,7 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
 | 8 | `hypomnesis::process_exists` (observation 1) | feature | ✅ |
 | 9 | `hmn watch` warns about a nonexistent explicit PID (observation 1) | feature | ✅ |
 | 10 | `hmn watch` rows aligned under the header (observation 2) | fix | ✅ |
-| 11 | Limitations after the command list in `hmn --help` (observation 3) | docs | ⬜ |
+| 11 | Limitations after the command list in `hmn --help` (observation 3) | docs | ✅ |
 | 12 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ⬜ |
 
 ---
