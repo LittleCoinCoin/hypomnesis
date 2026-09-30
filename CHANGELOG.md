@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where `ESRCH` means no such process (`metal` feature). Added for `hmn watch`'s warning about a
   nonexistent explicit PID. Same report, observation 1.
 
+- **`hmn watch` warns when an explicit PID names no running process** (`src/bin/hmn/watch.rs`) —
+  `hmn watch 999999` ran silently as if the PID existed, printing `0 MiB` rows, the same as a
+  process that exists but holds no GPU memory yet (a trainer between stages). At attach, each
+  explicit PID absent from the first sample is checked with `process_exists`, and one that
+  names no running process gets `hmn watch: pid=999999 names no running process; its rows will
+  read 0 MiB` on stderr. It is still watched, and the exit code is unchanged; a PID the platform
+  cannot judge gets no warning. Nothing is guessed in its place: PID numbers carry no
+  similarity. Same report, observation 1.
+
 ### Changed
 
 - **`hmn ps`'s filters are one `PsFilters` value** (`src/bin/hmn/ps.rs`) — the `ROADMAP.md`

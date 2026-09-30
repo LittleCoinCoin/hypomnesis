@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
-use hypomnesis::{GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_processes};
+use hypomnesis::{
+    GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_processes, process_exists,
+};
 
 use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
@@ -835,6 +837,31 @@ fn matchable_name<'a>(current: Option<&'a str>, sticky: Option<&'a str>) -> Opti
     filterable_name(current).or_else(|| filterable_name(sticky))
 }
 
+/// The attach-time stderr warnings for explicit PIDs that name no running
+/// process: one per PID in `explicit` that `listed` (the first sample)
+/// does not hold and `exists` answers `Some(false)` for. A PID in the
+/// listing plainly exists and is not asked about; `None` ("can't tell")
+/// says nothing. Such a PID is still watched, as before, so a typo is
+/// told apart from a process that merely holds no GPU memory yet — the
+/// one distinction `hmn watch` can make at attach; mid-watch it still
+/// cannot tell "exited" from "holds no GPU memory". `exists` is
+/// `hypomnesis::process_exists` in `run_watch`, a stub in tests.
+#[must_use]
+fn missing_pid_notices(
+    explicit: &[u32],
+    listed: &[GpuProcessEntry],
+    exists: impl Fn(u32) -> Option<bool>,
+) -> Vec<String> {
+    explicit
+        .iter()
+        .filter(|&&pid| !listed.iter().any(|e| e.pid == pid))
+        .filter(|&&pid| exists(pid) == Some(false))
+        .map(|pid| {
+            format!("hmn watch: pid={pid} names no running process; its rows will read 0 MiB")
+        })
+        .collect()
+}
+
 /// The one-shot stderr notices for PIDs in `unmatchable` that this watch
 /// has not announced yet, recording them in `announced` — so a process
 /// `--filter` cannot judge is named exactly once rather than every
@@ -1020,6 +1047,9 @@ pub fn run_watch(
         );
     } else {
         print!("{}", format_watch_header_text());
+    }
+    for notice in missing_pid_notices(&selection.explicit, &first_rows, process_exists) {
+        eprintln!("{notice}");
     }
     for notice in unmatchable_notices(&first.unmatchable, &mut announced) {
         eprintln!("{notice}");
@@ -1926,6 +1956,25 @@ mod tests {
         assert_eq!(matchable_name(None, None), None);
         // `[kernel]` is a stable, genuine name (PID 4), as for PID reuse.
         assert_eq!(matchable_name(Some("[kernel]"), None), Some("[kernel]"));
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn missing_pid_notices_name_only_pids_known_not_to_exist() {
+        let listed = [entry(15534, Some("canvas"), 0, 0)];
+        // 15534 is listed (never asked); 15503 exists without GPU memory;
+        // 999999 does not exist; 42 cannot be judged.
+        let exists = |pid: u32| match pid {
+            999_999 => Some(false),
+            42 => None,
+            _ => Some(true),
+        };
+        assert_eq!(
+            missing_pid_notices(&[15534, 15503, 999_999, 42], &listed, exists),
+            ["hmn watch: pid=999999 names no running process; its rows will read 0 MiB"]
+        );
+        // Auto-selection has no explicit PIDs: nothing to warn about.
+        assert!(missing_pid_notices(&[], &listed, |_| Some(false)).is_empty());
     }
 
     #[test]

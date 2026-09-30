@@ -314,6 +314,9 @@ enum Commands {
     /// (exited, or simply holds no GPU memory right now) renders as 0
     /// bytes each interval — `hmn watch` does not distinguish the two;
     /// it does not auto-stop on this basis, use `--duration` or Ctrl+C.
+    /// At attach it does check each explicit PID: one that names no
+    /// running process gets a one-line warning on stderr (since
+    /// v0.2.13), and is still watched.
     /// If the OS recycles a watched PID onto a different process
     /// mid-watch, a resolved-name change is used as a best-effort signal
     /// to reset that row's baseline rather than mixing two processes'

@@ -334,7 +334,10 @@ run. Each interval prints one row per watched PID — committed / shared
 condition `hmn spill` uses, reused unchanged). A watched PID absent from a
 sample renders `0 B` — `hmn watch` cannot distinguish "exited" from
 "currently holds no GPU memory" and does not auto-stop on this basis; use
-`--duration` or Ctrl+C. `--interval` / `--duration` take duration strings
+`--duration` or Ctrl+C. At attach, though, an explicit PID that names no
+running process at all — a typo — gets a one-line stderr warning (since
+v0.2.13: `hmn watch: pid=999999 names no running process; its rows will read
+0 MiB`), and is still watched. `--interval` / `--duration` take duration strings
 (`500ms`, `30s`, `5m`, `1h`, or a bare number of seconds) rather than raw
 milliseconds.
 
