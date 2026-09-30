@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-09-30
+
+Answers an askesis dogfooding report
+([2026-09-28](docs/dogfooding-feedbacks/dogfooding-spill-verdict-wording-and-ps-filters.md)) from a
+rented Linux RTX 5090 and a Windows RTX 5060 Ti. Its first finding was a bug present since v0.2.6:
+where spill is not measurable, `hmn watch`'s summary said `no spill observed`. That is fixed, and
+`hmn watch` now also says when it attached to a spill already under way, which its growth-based
+verdict cannot count. `hmn ps` names the process being paged (`PAGED` / `device`) and states the
+device's verdict once; `hmn watch` follows. `hmn ps` gains `--filter`, `--exit-status` and a
+repeatable `--pid`, and an unlistable `--device` exits `2`. A new `process_exists` backs a warning
+for a nonexistent explicit PID; `hmn watch`'s columns line up; `hmn --help` lists its commands
+first. Plan: [`docs/roadmap-v0.2.13.md`](docs/roadmap-v0.2.13.md).
+
 ### Added
 
 - **`hmn ps --filter <PATTERN>` — list processes by name** (`src/bin/hmn/ps.rs`, `main.rs`) —
@@ -840,7 +853,8 @@ function bodies are placeholders that compile and pass clippy under
 - **`README.md`** — project overview with badges (CI, crates.io, docs.rs, MSRV, license, unsafe-deny, NVIDIA NVML+DXGI), install, usage, capability matrix, feature flags, license, and development conventions. Mirrors the structure used in [`anamnesis/README.md`](https://github.com/PCfVW/anamnesis/blob/main/README.md).
 - **`[package.metadata.docs.rs]`** — docs.rs builds with `all-features = true` and targets both `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`, exposing the Windows-only `dxgi` module on docs.rs alongside the cross-platform `nvml` path.
 
-[Unreleased]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/mi-for-the-rust-of-us/hypomnesis/compare/v0.2.9...v0.2.10

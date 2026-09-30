@@ -3,7 +3,7 @@
 > *Stop `hmn watch` from reporting a spill check it never ran, and let `hmn ps` say who is being
 > paged.*
 
-**Status: in progress.** Not pushed; no version bump until release.
+**Status: ✅ shipped 2026-09-30.** Twelve planned items, the consistency pass, and three found after it.
 
 ---
 
@@ -210,8 +210,10 @@ Left as they are, and why:
 - `Cargo.toml` bumped to `0.2.13`; this roadmap's status and the dogfooding report's `Status`
   flipped, per the dogfooding style guide.
 - The README's "what's new" banner rotated: 🆕 `0.2.13`, `0.2.12` to 🚀, `0.2.10` dropped.
-- The `hmn watch` transcripts in `docs/tutorials/watching-a-running-job.md` and the README
-  re-captured from the `0.2.13` build, so they show the aligned columns.
+- The `hmn watch` transcripts in `docs/tutorials/watching-a-running-job.md` and the README were
+  annotated rather than re-captured, as the tutorials' earlier notes are: their prose analyses the
+  specific events of each capture, which a new capture would not reproduce. Each note says what a
+  current build shows differently.
 
 ---
 

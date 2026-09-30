@@ -88,7 +88,10 @@ desktop load — no training run in this transcript, which is exactly why
 predates the `Toolhelp32Snapshot` name-resolution fallback — on a current
 build, most such rows now resolve to a real name or a `[exited]`/
 `[protected]` bracket instead; see the
-[FAQ](../FAQ.md#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation).)*
+[FAQ](../FAQ.md#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation).
+Captured before v0.2.13 too: a current build lines the rows up under the header
+(`PID` fits 7 digits, `NAME` widens to the longest watched name) and adds a
+`PAGED` column to the closing per-PID table.)*
 
 When you already know the PID — from `hmn ps` (try `hmn ps --sort total` to
 rank by dedicated + shared together), from your training script's own PID, or
@@ -125,7 +128,7 @@ closing summary:
 {"kind":"summary","measurable":true,"spilled":true,"observations":45,"baseline_shared_bytes":458842112,"peak_shared_bytes":3179388928,"peak_dedicated_bytes":16272728064,"dedicated_limit_bytes":16831741952,"total_spill_duration_ms":0,"episodes":[{"start_label":"+54.1s","end_label":"+56.1s","peak_shared_bytes":3179388928,"observations":1,"duration_ms":0}],"per_pid":[{"pid":18640,"name":"spillforge.exe","baseline_used_bytes":14239346688,"peak_used_bytes":14239375360,"baseline_shared_bytes":310120448,"peak_shared_bytes":3042873344}]}
 ```
 
-*(real capture, predates v0.2.11 — a sample line captured today would carry a `"wall_clock":"<UTC ISO-8601>"` field right after `t_ms`, e.g. `"wall_clock":"2026-09-14T10:12:03.482Z"`; the closing `"kind":"summary"` object is unchanged, since `wall_clock` is sample-only)*
+*(real capture, predates v0.2.11 — a sample line captured today would carry a `"wall_clock":"<UTC ISO-8601>"` field right after `t_ms`, e.g. `"wall_clock":"2026-09-14T10:12:03.482Z"`, and, since v0.2.13, a `"paged"` field after `"spilling"`; since v0.2.13 the closing `"kind":"summary"` object also carries `"spilling_at_attach"` before `per_pid`, and each `per_pid[]` entry a `"paged"` field)*
 
 The **episode pattern** (many short episodes vs. one sustained one) reads
 exactly like `hmn spill`'s report —
@@ -201,7 +204,10 @@ hmn watch: per-PID  PID    NAME            BASELINE COMMIT  PEAK COMMIT  BASELIN
 stderr, the rows and tables to stdout — interleaved here as a terminal shows
 them. Repetitive intervals elided at the `...` marks. Also captured
 pre-v0.2.8: PID 17600's `?` is the same pre-fallback case as the transcript
-above — see the note there.)*
+above — see the note there. And before v0.2.13: a current build lines the rows
+up under the header, and on this spilling device reads `PAGED` for
+`spillforge.exe` (275 MiB shared, over the 256 MiB floor) and `device` for the
+others, instead of `SPILL` on every row.)*
 
 Four things to notice, all of them the point of the flag:
 
@@ -269,7 +275,9 @@ hmn watch: per-PID  PID    NAME            BASELINE COMMIT  PEAK COMMIT  BASELIN
 *(Real output, reference RTX 5060 Ti. `firefox.exe` (4.5 GiB) and `dwm.exe`
 (1.1 GiB) held GPU memory throughout; under `--top 3` alone both would have
 taken a slot, and neither appears. The workload stayed under the saturation
-threshold, so no spill — the point here is what was recorded.)*
+threshold, so no spill — the point here is what was recorded. Captured before
+v0.2.13, whose rows line up under the header and whose per-PID table adds a
+`PAGED` column.)*
 
 What to notice:
 
