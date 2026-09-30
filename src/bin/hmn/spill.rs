@@ -436,11 +436,12 @@ mod tests {
     }
 
     /// A summary object's adapter-level keys: its top-level keys minus
-    /// `watch`'s own `kind` tag and `per_pid` array.
+    /// `watch`'s own `kind` tag, `spilling_at_attach` flag and `per_pid`
+    /// array.
     fn spill_report_keys(json: &str) -> Vec<&str> {
         top_level_json_keys(json)
             .into_iter()
-            .filter(|k| *k != "kind" && *k != "per_pid")
+            .filter(|k| !matches!(*k, "kind" | "spilling_at_attach" | "per_pid"))
             .collect()
     }
 
@@ -457,7 +458,8 @@ mod tests {
             spill_report_keys(&format_spill_json(None)),
             SPILL_REPORT_JSON_KEYS
         );
-        let watch = format_watch_summary_json(None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
+        let watch =
+            format_watch_summary_json(None, None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
         assert_eq!(spill_report_keys(&watch), SPILL_REPORT_JSON_KEYS);
     }
 
@@ -473,6 +475,7 @@ mod tests {
         );
         let watch = format_watch_summary_json(
             Some(&report),
+            None,
             &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)],
         );
         assert_eq!(spill_report_keys(&watch), SPILL_REPORT_JSON_KEYS);

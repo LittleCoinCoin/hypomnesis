@@ -77,6 +77,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tools/spillforge`: attached before the spill, `spillforge.exe` read `PAGED` from its first
   spilling interval and `yes` in the summary.
 
+- **`hmn watch` says when it attached to a spill already under way** (`src/bin/hmn/watch.rs`) —
+  `watch` measures spill as shared-memory growth above its first sample, so a spill already under
+  way at attach went into the baseline: the rows read `no` and the summary `no spill observed`
+  while `hmn ps` said the device was spilling — a negative it did not measure, in `watch`'s main
+  use (attach to a job that already looks slow). Present since v0.2.6; the library documents it
+  ("start the tracker before the workload"), `hmn watch` did not. At attach, `watch` now takes
+  `hmn ps`'s one-snapshot verdict and, if the device is already spilling, warns once (`device 0 is
+  already spilling at attach (2.1 GiB shared); spill is measured as growth from here, so this
+  spill will not be counted — hmn ps shows it`); the closing summary repeats it, and the `--json`
+  summary gains `spilling_at_attach` (`true`/`false`/`null`). No verdict or exit code changes;
+  counting such a spill needs the tracker itself to change (`ROADMAP.md`). Found live while
+  validating `PAGED` in `watch`.
+
 ### Changed
 
 - **`hmn --help` lists its commands before the per-platform Limitations** (`src/bin/hmn/main.rs`)

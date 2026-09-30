@@ -69,7 +69,10 @@ Three things specific to `watch`:
   watchdog script to check directly
   (`hmn watch 21844 --duration 5m; [ $? -eq 1 ] && alert`), no JSON parsing
   needed for the common case. Where spill is not measurable (Linux, macOS),
-  `0` also means "not measured": read `measurable` from `--json` first.
+  `0` also means "not measured": read `measurable` from `--json` first. And
+  spill is measured as growth above the first sample, so a spill already
+  under way at attach is not counted: `watch` warns at attach and the summary
+  sets `spilling_at_attach` (since v0.2.13).
 - **A `0 MiB` row isn't necessarily "exited."** `hmn watch` can't tell "PID
   exited" from "PID alive, holds no GPU memory right now" apart, and doesn't
   try to — it renders zero either way and does not auto-stop. Use

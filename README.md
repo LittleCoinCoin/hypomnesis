@@ -338,7 +338,10 @@ condition `hmn spill` uses, reused unchanged). Since v0.2.13 it names the
 process being paged, as `hmn ps` does: while the adapter spills, a process
 whose own SHARED is at least 256 MiB reads `PAGED` and the others `device`;
 `--json` samples carry `paged`, and the closing per-PID summary says whether
-each process was ever paged. A watched PID absent from a
+each process was ever paged. Spill is measured as shared-memory growth above
+the first sample, so a spill already under way at attach is not counted; since
+v0.2.13 `hmn watch` says so at attach, in its closing summary, and as
+`spilling_at_attach` in `--json` — `hmn ps` shows the current state. A watched PID absent from a
 sample renders `0 MiB` — `hmn watch` cannot distinguish "exited" from
 "currently holds no GPU memory" and does not auto-stop on this basis; use
 `--duration` or Ctrl+C. At attach, though, an explicit PID that names no

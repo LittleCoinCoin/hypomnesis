@@ -188,9 +188,20 @@ Left as they are, and why:
 - **`hmn watch` still marked SPILL on every row.** Fixing `hmn ps` alone left the two commands
   answering "who is being paged?" differently. `hmn watch` now uses `hmn ps`'s rule and cells —
   the maintainer chose the absolute 256 MiB floor over growth since attach, which would miss a
-  process already paged when `watch` attaches — through one `format::spill_cell` and one
+  process already paged when `watch` attaches (though see the next item: `watch`'s *device*
+  verdict misses that case anyway, so the row never reads `PAGED` there either) — through one
+  `format::spill_cell` and one
   `ps::paged_verdict`. Samples and `per_pid[]` gain `paged`; the text per-PID summary a `PAGED`
   column. Live: attached before a `spillforge` spill, its rows read `PAGED` and its summary `yes`.
+- **`hmn watch` was blind to a spill already under way at attach.** Validating `PAGED` live by
+  attaching mid-spill printed `no` on every row and `no spill observed`, while `hmn ps` said the
+  device was spilling: the tracker measures growth above its first observation, which absorbed
+  the spill. Present since v0.2.6 and documented for the library only. v0.2.13 says so without
+  changing any verdict: at attach, `hmn ps`'s one-snapshot verdict drives a one-line warning; the
+  closing summary repeats it; the `--json` summary gains `spilling_at_attach`. Counting such a
+  spill needs the tracker to accept an absolute floor too — `ROADMAP.md`'s unified
+  `spill_condition` item, now un-gated. Live: attached mid-`spillforge`, the warning and the
+  summary line both appear.
 
 ---
 

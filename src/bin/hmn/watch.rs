@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use hypomnesis::{
     GpuProcessEntry, SpillReport, SpillTracker, device_info, gpu_processes, process_exists,
+    snapshot_is_spilling,
 };
 
 use crate::format::{
@@ -541,9 +542,26 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
 /// must not reach [`format_spill_report_with_prefix`]: its all-zeros
 /// report would print `peak dedicated 0 MiB` and `no spill observed`,
 /// a measured-looking negative. It says what `hmn spill` says instead.
-fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSummary]) -> String {
+///
+/// When the device was already spilling at attach (`spilling_at_attach`),
+/// a line after the report says the baseline includes that spill, so its
+/// episode count covers only growth beyond it.
+fn format_watch_summary_text(
+    report: Option<&SpillReport>,
+    spilling_at_attach: Option<bool>,
+    per_pid: &[WatchPidSummary],
+) -> String {
     let mut out = match report {
-        Some(r) if r.measurable => format_spill_report_with_prefix("hmn watch", r),
+        Some(r) if r.measurable => {
+            let mut block = format_spill_report_with_prefix("hmn watch", r);
+            if spilling_at_attach == Some(true) {
+                block.push_str(
+                    "hmn watch: the device was already spilling at attach; the baseline above \
+                     includes that spill, so episodes count only growth beyond it\n",
+                );
+            }
+            block
+        }
         // BORROW: explicit to_owned — the summary is built as an owned String.
         Some(_) => {
             "hmn watch: spill not measurable on this platform; per-PID VRAM below\n".to_owned()
@@ -558,18 +576,26 @@ fn format_watch_summary_text(report: Option<&SpillReport>, per_pid: &[WatchPidSu
 }
 
 /// Format the closing summary as one JSON object:
-/// `{"kind":"summary",...adapter SpillReport fields...,"per_pid":[...]}`.
+/// `{"kind":"summary",...adapter SpillReport fields...,"spilling_at_attach":<true|false|null>,"per_pid":[...]}`.
+/// `spilling_at_attach` is `hmn ps`'s one-snapshot verdict taken at
+/// attach (`null` when not measurable): `true` means the baseline
+/// includes a spill already under way, which the episodes do not count.
 /// `report: None` (spill tracking unavailable) emits the same
 /// all-zeros `"measurable":false` shape `hmn spill --json` uses — both
 /// go through [`write_spill_report_fields`] — so scripted consumers
 /// always parse one shape either way.
 pub fn format_watch_summary_json(
     report: Option<&SpillReport>,
+    spilling_at_attach: Option<bool>,
     per_pid: &[WatchPidSummary],
 ) -> String {
     let mut out = String::from(r#"{"kind":"summary","#);
     write_spill_report_fields(&mut out, report);
-    out.push_str(r#","per_pid":["#);
+    let _ = write!(
+        out,
+        r#","spilling_at_attach":{},"per_pid":["#,
+        json_value_or_null(spilling_at_attach)
+    );
     for (i, p) in per_pid.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -899,6 +925,32 @@ fn matchable_name<'a>(current: Option<&'a str>, sticky: Option<&'a str>) -> Opti
     filterable_name(current).or_else(|| filterable_name(sticky))
 }
 
+/// The attach-time stderr warning for a device that is already spilling
+/// when `hmn watch` attaches (`spilling_at_attach`, `hmn ps`'s one-snapshot
+/// verdict), or `None`. `hmn watch` measures spill as shared-memory growth
+/// above its first observation, so a spill already under way at attach is
+/// taken into that baseline and not counted: saying so up front keeps a
+/// later `no spill observed` from reading as a measured negative. The
+/// shared figure is summed over the device's processes in `rows`, as
+/// `hmn ps` sums it.
+#[must_use]
+fn spilling_at_attach_notice(
+    device: u32,
+    spilling_at_attach: Option<bool>,
+    rows: &[GpuProcessEntry],
+) -> Option<String> {
+    (spilling_at_attach == Some(true)).then(|| {
+        let shared = rows
+            .iter()
+            .fold(0_u64, |sum, e| sum.saturating_add(e.shared_used_bytes));
+        format!(
+            "hmn watch: device {device} is already spilling at attach ({} shared); spill is \
+             measured as growth from here, so this spill will not be counted — `hmn ps` shows it",
+            format_vram(shared)
+        )
+    })
+}
+
 /// The attach-time stderr warnings for explicit PIDs that name no running
 /// process: one per PID in `explicit` that `listed` (the first sample)
 /// does not hold and `exists` answers `Some(false)` for. A PID in the
@@ -1046,6 +1098,10 @@ pub fn run_watch(
             return std::process::ExitCode::from(2);
         }
     };
+    // `hmn ps`'s one-snapshot verdict, taken once at attach: the tracker
+    // measures growth from its first observation, so it cannot see a spill
+    // already under way; this can, and the watch says so.
+    let spilling_at_attach = snapshot_is_spilling(device);
 
     let mut state = WatchState::new();
     // PIDs already named as unmatchable by `--filter`, so each is announced once.
@@ -1112,6 +1168,9 @@ pub fn run_watch(
         );
     } else {
         print!("{}", format_watch_header_text(name_width));
+    }
+    if let Some(notice) = spilling_at_attach_notice(device, spilling_at_attach, &first_rows) {
+        eprintln!("{notice}");
     }
     for notice in missing_pid_notices(&selection.explicit, &first_rows, process_exists) {
         eprintln!("{notice}");
@@ -1210,9 +1269,15 @@ pub fn run_watch(
         .collect();
 
     if json {
-        print!("{}", format_watch_summary_json(report.as_ref(), &per_pid));
+        print!(
+            "{}",
+            format_watch_summary_json(report.as_ref(), spilling_at_attach, &per_pid)
+        );
     } else {
-        print!("{}", format_watch_summary_text(report.as_ref(), &per_pid));
+        print!(
+            "{}",
+            format_watch_summary_text(report.as_ref(), spilling_at_attach, &per_pid)
+        );
     }
 
     std::process::ExitCode::from(watch_exit_code(
@@ -2290,7 +2355,7 @@ mod tests {
 
     #[test]
     fn format_watch_summary_text_no_tracker_notes_and_still_shows_per_pid() {
-        let s = format_watch_summary_text(None, &[pid_summary(1, Some("a.exe"), 0, 0, 0, 0)]);
+        let s = format_watch_summary_text(None, None, &[pid_summary(1, Some("a.exe"), 0, 0, 0, 0)]);
         assert!(s.contains("spill tracking unavailable"));
         assert!(s.contains("per-PID"));
         assert!(s.contains('1'));
@@ -2306,6 +2371,7 @@ mod tests {
         assert!(!report.measurable);
         let s = format_watch_summary_text(
             Some(&report),
+            None,
             &[pid_summary(15534, Some("canvas"), 0, 0, 0, 0)],
         );
         assert!(s.starts_with(
@@ -2320,18 +2386,49 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn format_watch_summary_text_measurable_uses_watch_prefix() {
-        let s = format_watch_summary_text(Some(&spilling_report()), &[]);
+        let s = format_watch_summary_text(Some(&spilling_report()), None, &[]);
         assert!(s.starts_with("hmn watch: peak dedicated"));
     }
 
     #[test]
     fn format_watch_summary_json_unmeasurable_shape() {
-        let s = format_watch_summary_json(None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
+        let s =
+            format_watch_summary_json(None, None, &[pid_summary(1, Some("a.exe"), 10, 20, 0, 0)]);
         assert!(s.starts_with(
             r#"{"kind":"summary","measurable":false,"spilled":false,"observations":0,"#
         ));
         assert!(s.contains(r#""per_pid":[{"pid":1,"name":"a.exe","baseline_used_bytes":10,"peak_used_bytes":20,"baseline_shared_bytes":0,"peak_shared_bytes":0,"paged":null}]"#));
+        assert!(s.contains(r#""spilling_at_attach":null,"per_pid":["#));
         assert!(s.ends_with("]}\n"));
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn spilling_at_attach_notice_only_when_the_device_already_spills() {
+        let rows = [
+            entry(1, Some("spillforge.exe"), 0, 2 * 1024 * 1024 * 1024),
+            entry(2, Some("dwm.exe"), 0, 100 * 1024 * 1024),
+        ];
+        assert_eq!(
+            spilling_at_attach_notice(0, Some(true), &rows).as_deref(),
+            Some(
+                "hmn watch: device 0 is already spilling at attach (2.1 GiB shared); spill is \
+                 measured as growth from here, so this spill will not be counted — `hmn ps` shows it"
+            )
+        );
+        assert_eq!(spilling_at_attach_notice(0, Some(false), &rows), None);
+        assert_eq!(spilling_at_attach_notice(0, None, &rows), None);
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn format_watch_summary_notes_a_baseline_taken_mid_spill() {
+        let text = format_watch_summary_text(Some(&spilling_report()), Some(true), &[]);
+        assert!(text.contains("\nhmn watch: the device was already spilling at attach;"));
+        let text = format_watch_summary_text(Some(&spilling_report()), Some(false), &[]);
+        assert!(!text.contains("already spilling"));
+        let json = format_watch_summary_json(Some(&spilling_report()), Some(true), &[]);
+        assert!(json.contains(r#""spilling_at_attach":true,"per_pid":[]"#));
     }
 
     #[test]
@@ -2358,7 +2455,7 @@ mod tests {
     #[cfg(feature = "test-helpers")]
     #[test]
     fn format_watch_summary_json_measurable_shape() {
-        let s = format_watch_summary_json(Some(&spilling_report()), &[]);
+        let s = format_watch_summary_json(Some(&spilling_report()), None, &[]);
         assert!(s.starts_with(r#"{"kind":"summary","measurable":true,"spilled":true,"#));
         assert!(s.contains(r#""per_pid":[]"#));
     }

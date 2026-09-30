@@ -316,6 +316,15 @@ is a hard error (exit `2`).
 
 ## Gotchas specific to `watch`
 
+- **A spill already under way at attach is not counted.** `hmn watch` measures
+  spill as shared-memory growth above its *first* sample, so attaching to a job
+  that is already spilling takes that spill into the baseline: the episodes
+  count only growth beyond it, and the rows read `no` while the device spills.
+  Since v0.2.13 `hmn watch` says so — at attach (`device 0 is already spilling
+  at attach (…); spill is measured as growth from here, so this spill will not
+  be counted`), in the closing summary, and as `"spilling_at_attach": true` in
+  `--json`. For the current state, use `hmn ps`, whose one-snapshot verdict
+  does see it; to measure the spill itself, attach before the workload starts.
 - **Frozen vs. dynamic PID sets.** By default, `hmn watch` keeps the same PID
   set for the entire run (the frozen-set behavior) — good when you already
   know the PID, wrong for workloads that spawn new GPU processes over time.

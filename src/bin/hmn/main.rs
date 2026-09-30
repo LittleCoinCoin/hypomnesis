@@ -319,7 +319,11 @@ enum Commands {
     /// it does not auto-stop on this basis, use `--duration` or Ctrl+C.
     /// At attach it does check each explicit PID: one that names no
     /// running process gets a one-line warning on stderr (since
-    /// v0.2.13), and is still watched.
+    /// v0.2.13), and is still watched. Spill is measured as shared-memory
+    /// growth above the first sample, so a spill already under way at
+    /// attach is not counted; since v0.2.13 a warning says so at attach
+    /// and the closing summary repeats it (`hmn ps` shows the current
+    /// state).
     /// If the OS recycles a watched PID onto a different process
     /// mid-watch, a resolved-name change is used as a best-effort signal
     /// to reset that row's baseline rather than mixing two processes'
@@ -417,8 +421,11 @@ enum Commands {
         /// values, `null` exactly when `spilling` is) says whether this
         /// process is being paged — the adapter is spilling and its own
         /// shared bytes are at least 256 MiB, `hmn ps`'s rule — and each
-        /// `per_pid[]` entry says whether it ever was. Pipeable to
-        /// `jq -c` live.
+        /// `per_pid[]` entry says whether it ever was. The summary's
+        /// `spilling_at_attach` (since v0.2.13, `true`/`false`/`null`) is
+        /// `hmn ps`'s verdict at attach: `true` means the baseline
+        /// includes a spill already under way, which the episodes do not
+        /// count. Pipeable to `jq -c` live.
         #[arg(long)]
         json: bool,
     },
