@@ -509,6 +509,7 @@ Same discipline, same answer (recorded here so it isn't re-argued in a future PR
 | Driver version | `NVML` (`nvmlSystemGetDriverVersion`) + `nvidia-smi` fallback (`--query-gpu=driver_version`) | same as Windows | n/a (`None` — no NVIDIA driver on Apple Silicon) |
 | Per-process GPU memory | `DXGI` (`IDXGIAdapter3::QueryVideoMemoryInfo`) | `NVML` (`nvmlDeviceGetComputeRunningProcesses`) | `ledger(LEDGER_ENTRY_INFO_V2).graphics_footprint` |
 | GPU-process listing (other PIDs) | `PDH` (`\GPU Process Memory(*)\Dedicated Usage` + `Shared Usage`) + `OpenProcess` / `QueryFullProcessImageNameW`; `nvidia-smi` fallback | `NVML` + `/proc/<pid>/comm`, extended past its 15-byte cut via `exe` / `argv[0]` (compute-only) | `proc_listpids` + per-PID `ledger` + `proc_pidpath` (same-user; `sudo` for cross-user) |
+| Process existence (`process_exists`, since v0.2.13) | `Toolhelp32` process snapshot (`pdh` feature — the mechanism the GPU-process listing uses for names) | `/proc/<pid>/status`, whose `Tgid` must equal the PID so a thread ID is not taken for a process (no `unsafe`) | `proc_pidpath`; `ESRCH` means no such process (`metal` feature) |
 | Spill detection (`SpillTracker`, `hmn spill`, `hmn watch`) | `PDH` `\GPU Adapter Memory(*)\Dedicated Usage` + `Shared Usage` (`WDDM 2.0`+) | n/a (`is_spill_measurable()` = `false` — normal `CUDA` OOMs rather than silently paging) | n/a (`false` — `UMA` has nothing to spill *into*) |
 | Fallback | `nvidia-smi` subprocess | `nvidia-smi` subprocess | none (libSystem syscalls always succeed on Apple Silicon) |
 
