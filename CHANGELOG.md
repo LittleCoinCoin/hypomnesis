@@ -65,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot judge gets no warning. Nothing is guessed in its place: PID numbers carry no
   similarity. Same report, observation 1.
 
+- **`hmn watch` names the paged process too** (`src/bin/hmn/watch.rs`, `format.rs`, `ps.rs`) —
+  with the same rule and vocabulary as `hmn ps`: while the adapter spills, a row whose own SHARED
+  is at least 256 MiB reads `PAGED` and the others `device`; `no` and `?` are unchanged.
+  `--json` samples gain `paged` (`null` exactly when `spilling` is), `per_pid[]` entries gain
+  `paged` (paged in at least one interval, `null` when spill was not measurable), and the text
+  per-PID summary gains a `PAGED` column (`yes`/`no`/`?`). One cell renderer
+  (`format::spill_cell`) and one rule (`ps::paged_verdict`) now serve both commands, so they
+  cannot disagree about who is being paged. Found after the consistency pass: fixing `hmn ps`
+  alone left `hmn watch` answering the same question the old way. Live-validated with
+  `tools/spillforge`: attached before the spill, `spillforge.exe` read `PAGED` from its first
+  spilling interval and `yes` in the summary.
+
 ### Changed
 
 - **`hmn --help` lists its commands before the per-platform Limitations** (`src/bin/hmn/main.rs`)

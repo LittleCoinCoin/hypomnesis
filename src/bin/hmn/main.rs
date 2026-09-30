@@ -413,7 +413,12 @@ enum Commands {
         /// driver's own run log. `spilling` is `true`/`false`/`null`
         /// (since v0.2.11) — `null`, never `false`, when this run has
         /// no measurable spill source, matching `hmn ps`'s SPILL
-        /// column honesty contract. Pipeable to `jq -c` live.
+        /// column honesty contract. `paged` (since v0.2.13, same
+        /// values, `null` exactly when `spilling` is) says whether this
+        /// process is being paged — the adapter is spilling and its own
+        /// shared bytes are at least 256 MiB, `hmn ps`'s rule — and each
+        /// `per_pid[]` entry says whether it ever was. Pipeable to
+        /// `jq -c` live.
         #[arg(long)]
         json: bool,
     },

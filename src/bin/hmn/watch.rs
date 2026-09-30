@@ -19,7 +19,8 @@ use crate::format::{
     json_string, json_string_or_null, json_value_or_null, spill_cell,
 };
 use crate::ps::{
-    PsRow, SortKey, filterable_name, footprint_bytes, matches_any, ps_row_comparator, resolved_name,
+    PsRow, SortKey, filterable_name, footprint_bytes, matches_any, paged_verdict,
+    ps_row_comparator, resolved_name,
 };
 use crate::spill::{format_spill_report_with_prefix, write_spill_report_fields};
 
@@ -58,6 +59,9 @@ struct WatchedPidState {
     /// Whether the unresolved-growth hint has already fired for this
     /// PID (fires at most once per watch).
     growth_hint_fired: bool,
+    /// Whether this PID read `PAGED` in at least one interval
+    /// ([`paged_verdict`]) — the closing summary's per-PID verdict.
+    ever_paged: bool,
 }
 
 impl WatchedPidState {
@@ -74,6 +78,7 @@ impl WatchedPidState {
             peak_shared_bytes: shared_bytes,
             last_name: None,
             growth_hint_fired: false,
+            ever_paged: false,
         }
     }
 }
@@ -154,6 +159,11 @@ struct WatchSampleRow {
     /// set) — never collapsed into `Some(false)`, matching `hmn ps`'s
     /// SPILL column/`spilling` field contract.
     spilling: Option<bool>,
+    /// Whether this process is being paged this interval
+    /// ([`paged_verdict`]: the device is spilling and its shared bytes are
+    /// at least 256 MiB, the rule `hmn ps` uses). `None` exactly when
+    /// [`Self::spilling`] is. Who is being paged, not who caused it.
+    paged: Option<bool>,
 }
 
 /// End-of-watch peak/baseline summary for one watched PID.
@@ -170,6 +180,9 @@ pub struct WatchPidSummary {
     pub baseline_shared_bytes: u64,
     /// Highest shared-resident reading across the watch.
     pub peak_shared_bytes: u64,
+    /// Whether this process was paged in at least one interval. `None`
+    /// when spill was not measurable for this run.
+    pub paged: Option<bool>,
 }
 
 /// Signed byte delta `current - previous`.
@@ -340,6 +353,11 @@ fn process_sample(
             }
         }
 
+        let paged = paged_verdict(spilling, shared_bytes);
+        if paged == Some(true) {
+            entry.ever_paged = true;
+        }
+
         out.push(WatchSampleRow {
             pid,
             name,
@@ -348,6 +366,7 @@ fn process_sample(
             shared_bytes,
             shared_delta,
             spilling,
+            paged,
         });
     }
     out
@@ -373,7 +392,7 @@ fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow], name_width
             format_vram(r.shared_bytes),
             format_delta(r.shared_delta),
             // BORROW: explicit to_owned — the table owns its cells.
-            spill_cell(r.spilling).to_owned(),
+            spill_cell(r.spilling, r.paged).to_owned(),
         ]);
     }
     let time_label = format!("+{:.1}s", elapsed.as_secs_f64());
@@ -454,9 +473,10 @@ fn format_watch_rows_json(
     for row in rows {
         let name_json = json_string_or_null(row.name.as_deref());
         let spilling_json = json_value_or_null(row.spilling);
+        let paged_json = json_value_or_null(row.paged);
         let _ = writeln!(
             out,
-            r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{spilling_json}}}"#,
+            r#"{{"kind":"sample","t_ms":{},"wall_clock":"{wall_clock_json}","pid":{},"name":{name_json},"used_bytes":{},"used_delta_bytes":{},"shared_used_bytes":{},"shared_delta_bytes":{},"spilling":{spilling_json},"paged":{paged_json}}}"#,
             duration_ms(elapsed),
             row.pid,
             row.used_bytes,
@@ -483,6 +503,7 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
         "PEAK COMMIT",
         "BASELINE SHARED",
         "PEAK SHARED",
+        "PAGED",
     ]);
     for p in per_pid {
         table.push_row(vec![
@@ -494,6 +515,14 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
             format_vram(p.peak_used_bytes),
             format_vram(p.baseline_shared_bytes),
             format_vram(p.peak_shared_bytes),
+            // BORROW: explicit to_owned — the table owns its cells; `?`
+            // when spill was not measurable, as in the SPILL column.
+            match p.paged {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "?",
+            }
+            .to_owned(),
         ]);
     }
     let header_prefix = "hmn watch: per-PID  ";
@@ -548,12 +577,13 @@ pub fn format_watch_summary_json(
         let name_json = json_string_or_null(p.name.as_deref());
         let _ = write!(
             out,
-            r#"{{"pid":{},"name":{name_json},"baseline_used_bytes":{},"peak_used_bytes":{},"baseline_shared_bytes":{},"peak_shared_bytes":{}}}"#,
+            r#"{{"pid":{},"name":{name_json},"baseline_used_bytes":{},"peak_used_bytes":{},"baseline_shared_bytes":{},"peak_shared_bytes":{},"paged":{}}}"#,
             p.pid,
             p.baseline_used_bytes,
             p.peak_used_bytes,
             p.baseline_shared_bytes,
             p.peak_shared_bytes,
+            json_value_or_null(p.paged),
         );
     }
     out.push_str("]}\n");
@@ -1160,6 +1190,8 @@ pub fn run_watch(
     }
 
     let report = tracker.map(SpillTracker::into_report);
+    // A per-PID paged verdict only where spill was measurable at all.
+    let measurable = report.as_ref().is_some_and(|r| r.measurable);
     let per_pid: Vec<WatchPidSummary> = state
         .seen_order
         .iter()
@@ -1172,6 +1204,7 @@ pub fn run_watch(
                 peak_used_bytes: s.map_or(0, |s| s.peak_used_bytes),
                 baseline_shared_bytes: s.map_or(0, |s| s.baseline_shared_bytes),
                 peak_shared_bytes: s.map_or(0, |s| s.peak_shared_bytes),
+                paged: measurable.then(|| s.is_some_and(|s| s.ever_paged)),
             }
         })
         .collect();
@@ -1320,6 +1353,7 @@ mod tests {
             shared_bytes: shared,
             shared_delta,
             spilling,
+            paged: paged_verdict(spilling, shared),
         }
     }
 
@@ -1434,7 +1468,18 @@ mod tests {
         let s = format_watch_rows_text(Duration::from_secs(10), &[r], 0);
         assert!(s.contains("+700 MiB"));
         assert!(s.contains("+576 MiB"));
-        assert!(s.contains("SPILL"));
+        // Since v0.2.13 the paged process reads PAGED, as in `hmn ps`.
+        assert!(s.contains("PAGED"));
+    }
+
+    #[test]
+    fn format_watch_rows_text_spilling_device_unpaged_row_reads_device() {
+        // The device is spilling, but this process holds only a benign
+        // staging baseline: not the one being paged.
+        let r = watch_row(4728, Some("Zed.exe"), 0, 0, 110 * 1024 * 1024, 0, true);
+        let s = format_watch_rows_text(Duration::ZERO, &[r], 0);
+        assert!(s.contains("device"));
+        assert!(!s.contains("PAGED"));
     }
 
     #[test]
@@ -1471,7 +1516,7 @@ mod tests {
         );
         let s = format_watch_rows_json(Duration::from_millis(3_500), SystemTime::UNIX_EPOCH, &[r]);
         assert!(s.starts_with(
-            r#"{"kind":"sample","t_ms":3500,"wall_clock":"1970-01-01T00:00:00.000Z","pid":7,"name":"py.exe","used_bytes":1048576,"used_delta_bytes":1048576,"shared_used_bytes":424242,"shared_delta_bytes":-1000,"spilling":true}"#
+            r#"{"kind":"sample","t_ms":3500,"wall_clock":"1970-01-01T00:00:00.000Z","pid":7,"name":"py.exe","used_bytes":1048576,"used_delta_bytes":1048576,"shared_used_bytes":424242,"shared_delta_bytes":-1000,"spilling":true,"paged":false}"#
         ));
         assert!(s.ends_with('\n'));
     }
@@ -2285,8 +2330,29 @@ mod tests {
         assert!(s.starts_with(
             r#"{"kind":"summary","measurable":false,"spilled":false,"observations":0,"#
         ));
-        assert!(s.contains(r#""per_pid":[{"pid":1,"name":"a.exe","baseline_used_bytes":10,"peak_used_bytes":20,"baseline_shared_bytes":0,"peak_shared_bytes":0}]"#));
+        assert!(s.contains(r#""per_pid":[{"pid":1,"name":"a.exe","baseline_used_bytes":10,"peak_used_bytes":20,"baseline_shared_bytes":0,"peak_shared_bytes":0,"paged":null}]"#));
         assert!(s.ends_with("]}\n"));
+    }
+
+    #[test]
+    fn format_watch_per_pid_block_paged_column() {
+        let mut paged = pid_summary(26476, Some("canvas.exe"), 0, 0, 0, 2 << 30);
+        paged.paged = Some(true);
+        let mut not_paged = pid_summary(22108, Some("firefox.exe"), 0, 0, 0, 0);
+        not_paged.paged = Some(false);
+        let unmeasured = pid_summary(15534, Some("canvas"), 0, 0, 0, 0);
+        let s = format_watch_per_pid_block(&[paged, not_paged, unmeasured]);
+        assert!(s.starts_with("hmn watch: per-PID  PID"));
+        assert!(s.contains("PEAK SHARED  PAGED"));
+        let cell = |pid: &str| {
+            s.lines()
+                .find(|l| l.contains(pid))
+                .and_then(|l| l.split_whitespace().last())
+                .map(str::to_owned)
+        };
+        assert_eq!(cell("26476").as_deref(), Some("yes"));
+        assert_eq!(cell("22108").as_deref(), Some("no"));
+        assert_eq!(cell("15534").as_deref(), Some("?"));
     }
 
     #[cfg(feature = "test-helpers")]

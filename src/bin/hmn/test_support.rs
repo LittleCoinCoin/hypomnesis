@@ -97,5 +97,6 @@ pub fn pid_summary(
         peak_used_bytes: peak_used,
         baseline_shared_bytes: baseline_shared,
         peak_shared_bytes: peak_shared,
+        paged: None,
     }
 }

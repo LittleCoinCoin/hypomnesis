@@ -77,18 +77,23 @@ pub fn device_name_suffix(name: Option<&str>) -> String {
     name.map_or_else(String::new, |n| format!(" [{n}]"))
 }
 
-/// SPILL-column cell for one row's `spilling` verdict: `SPILL`, `no`, or
-/// `?`. `?` rather than `no` for `None` is the v0.2.11 honesty contract —
-/// the same "can't tell" glyph used for unresolved process names — so an
-/// operator never mistakes "not measurable here" for "measured, not
-/// spilling". Shared by `hmn ps`'s table and `hmn watch`'s rows so the
-/// two surfaces cannot render the contract differently.
+/// SPILL-column cell for one row, from its device's verdict (`spilling`)
+/// and whether this process is being paged (`paged`, `ps::paged_verdict`):
+/// `PAGED` when the device is spilling and this process is paged,
+/// `device` when the device is spilling but this process is not paged,
+/// `no` when the device is not spilling, and `?` when spill is not
+/// measurable. `?` rather than `no` for `None` is the v0.2.11 honesty
+/// contract — the same "can't tell" glyph used for unresolved process
+/// names — so an operator never mistakes "not measurable here" for
+/// "measured, not spilling". Shared by `hmn ps`'s table and `hmn watch`'s
+/// rows so the two surfaces cannot render the contract differently.
 #[must_use]
-pub const fn spill_cell(spilling: Option<bool>) -> &'static str {
-    match spilling {
-        Some(true) => "SPILL",
-        Some(false) => "no",
-        None => "?",
+pub const fn spill_cell(spilling: Option<bool>, paged: Option<bool>) -> &'static str {
+    match (spilling, paged) {
+        (Some(true), Some(true)) => "PAGED",
+        (Some(true), _) => "device",
+        (Some(false), _) => "no",
+        (None, _) => "?",
     }
 }
 
@@ -542,10 +547,11 @@ mod tests {
 
     #[test]
     fn spill_cell_renders_the_honesty_contract() {
-        assert_eq!(spill_cell(Some(true)), "SPILL");
-        assert_eq!(spill_cell(Some(false)), "no");
+        assert_eq!(spill_cell(Some(true), Some(true)), "PAGED");
+        assert_eq!(spill_cell(Some(true), Some(false)), "device");
+        assert_eq!(spill_cell(Some(false), Some(false)), "no");
         // "can't tell" must never render as "measured, not spilling".
-        assert_eq!(spill_cell(None), "?");
+        assert_eq!(spill_cell(None, None), "?");
     }
 
     #[test]

@@ -333,8 +333,12 @@ hmn watch --follow-new --filter train --json             # follow one program by
 With no PID, `hmn watch` auto-selects the top `--top` (default 5) processes
 by committed `VRAM` from the first sample and keeps that fixed set for the
 run. Each interval prints one row per watched PID — committed / shared
-`VRAM`, per-interval deltas, and a SPILL flag (the same adapter-wide
-condition `hmn spill` uses, reused unchanged). A watched PID absent from a
+`VRAM`, per-interval deltas, and a SPILL cell (the same adapter-wide
+condition `hmn spill` uses, reused unchanged). Since v0.2.13 it names the
+process being paged, as `hmn ps` does: while the adapter spills, a process
+whose own SHARED is at least 256 MiB reads `PAGED` and the others `device`;
+`--json` samples carry `paged`, and the closing per-PID summary says whether
+each process was ever paged. A watched PID absent from a
 sample renders `0 MiB` — `hmn watch` cannot distinguish "exited" from
 "currently holds no GPU memory" and does not auto-stop on this basis; use
 `--duration` or Ctrl+C. At attach, though, an explicit PID that names no

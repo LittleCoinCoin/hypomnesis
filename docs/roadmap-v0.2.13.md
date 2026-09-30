@@ -55,7 +55,8 @@ processes, so `hmn watch` exits `2` before printing any summary on the developme
   report's revision, citing `dogfooding-spill-triage-watch-mode.md`'s third verdict). The SPILL
   column reads `PAGED` when the device is spilling and the row's SHARED is at least
   `DEFAULT_SHARED_GROWTH_BYTES` (256 MiB, the floor the spill condition itself uses), `device`
-  on the device's other rows, and `no` / `?` as before. `hmn watch` keeps its column unchanged.
+  on the device's other rows, and `no` / `?` as before. (`hmn watch` was to keep its column unchanged; see
+  *Found after the consistency pass* for why it follows.)
 - **`--json` gains both `paged` and `shared_share`** beside the broadcast `spilling`, both
   `null` exactly when `spilling` is.
 - **The summary clause needs no library change.** Free memory comes from `device_info` (already
@@ -184,6 +185,12 @@ Left as they are, and why:
   name is what `--filter` matches. Only a longer name entering under `--follow-new` widens its
   column, for that interval. Live: `hmn watch <spillforge> <dwm>` lines up under a 14-wide `NAME`.
   Both alignment tests fail with the sizing disabled.
+- **`hmn watch` still marked SPILL on every row.** Fixing `hmn ps` alone left the two commands
+  answering "who is being paged?" differently. `hmn watch` now uses `hmn ps`'s rule and cells —
+  the maintainer chose the absolute 256 MiB floor over growth since attach, which would miss a
+  process already paged when `watch` attaches — through one `format::spill_cell` and one
+  `ps::paged_verdict`. Samples and `per_pid[]` gain `paged`; the text per-PID summary a `PAGED`
+  column. Live: attached before a `spillforge` spill, its rows read `PAGED` and its summary `yes`.
 
 ---
 

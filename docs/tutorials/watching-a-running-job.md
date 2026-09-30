@@ -99,11 +99,15 @@ outright, since there is no top-N to re-select against a fixed list.
 ## Step 2 — Read the live SPILL column
 
 Each row is one PID at one interval: committed `VRAM` and its delta, resident
-SHARED bytes and its delta, and a SPILL flag. The flag is the **adapter-wide**
-instantaneous state ([`SpillTracker::is_spilling`](https://docs.rs/hypomnesis) —
-spill is a device-level phenomenon, so it reads the same on every row sharing
-a timestamp) — the row whose own SHARED delta is climbing *at that moment* is
-your culprit, the same per-process attribution
+SHARED bytes and its delta, and a SPILL cell. The verdict behind it is the
+**adapter-wide** instantaneous state ([`SpillTracker::is_spilling`](https://docs.rs/hypomnesis) —
+spill is a device-level phenomenon). Since v0.2.13 the cell also says which
+process is being paged, with `hmn ps`'s rule: while the adapter spills, a row
+whose own SHARED is at least 256 MiB reads `PAGED`, the others `device`
+(the transcripts below predate it and show `SPILL` on every row). The row whose
+own SHARED delta is climbing *at that moment* is still the one to look at —
+`PAGED` says who is being paged, not who caused it — the same per-process
+attribution
 [Step 3 of the other tutorial](is-my-run-spilling.md#step-3--attribute-it-per-process)
 covers for `hmn ps`. Forced onto a real spill (the same `spillforge` fixture
 that validated `hmn spill` in v0.2.5, `20` GiB target / `20` s hold), watched

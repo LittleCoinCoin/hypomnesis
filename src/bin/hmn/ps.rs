@@ -13,7 +13,7 @@ use hypomnesis::spill::DEFAULT_SHARED_GROWTH_BYTES;
 use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
-    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null,
+    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -107,6 +107,18 @@ pub const fn is_paged(shared_used_bytes: u64) -> bool {
     shared_used_bytes >= DEFAULT_SHARED_GROWTH_BYTES
 }
 
+/// Whether a process is being paged, from its device's verdict
+/// (`spilling`) and its own shared bytes: `None` when spill is not
+/// measurable, `Some(false)` when the device is not spilling, else
+/// [`is_paged`]. The one rule behind `hmn ps`'s and `hmn watch`'s `PAGED`.
+#[must_use]
+pub const fn paged_verdict(spilling: Option<bool>, shared_used_bytes: u64) -> Option<bool> {
+    match spilling {
+        Some(spilling) => Some(spilling && is_paged(shared_used_bytes)),
+        None => None,
+    }
+}
+
 /// A row's [`PsRow::paged`] and [`PsRow::shared_share`] from its device's
 /// verdict (`spilling`), its own shared bytes, and the device's total
 /// shared bytes over every process. Both `None` when `spilling` is — the
@@ -129,7 +141,10 @@ pub const fn paged_and_share(
         let ratio = shared_used_bytes as f64 / device_shared_bytes as f64;
         ratio.min(1.0)
     };
-    (Some(spilling && is_paged(shared_used_bytes)), Some(share))
+    (
+        paged_verdict(Some(spilling), shared_used_bytes),
+        Some(share),
+    )
 }
 
 /// One spilling device's evidence for the summary line: what `hmn ps`
@@ -613,26 +628,10 @@ fn format_ps_table(rows: &[PsRow]) -> String {
                 .clone()
                 .unwrap_or_else(|| format!("GPU {}", r.device_index)),
             // BORROW: explicit to_owned — the table owns its cells.
-            ps_spill_cell(r).to_owned(),
+            spill_cell(r.spilling, r.paged).to_owned(),
         ]);
     }
     table.render(Some(""), "")
-}
-
-/// The SPILL cell of a `hmn ps` row: `PAGED` when its device is spilling
-/// and this process is being paged ([`PsRow::paged`]), `device` when its
-/// device is spilling but this process is not paged, `no` when the device
-/// is not spilling, and `?` when spill is not measurable — never `no`, so
-/// "can't tell" is not misread as "measured, not spilling". `hmn watch`
-/// keeps the plain per-device cell (`spill_cell`).
-#[must_use]
-pub const fn ps_spill_cell(row: &PsRow) -> &'static str {
-    match (row.spilling, row.paged) {
-        (Some(true), Some(true)) => "PAGED",
-        (Some(true), _) => "device",
-        (Some(false), _) => "no",
-        (None, _) => "?",
-    }
 }
 
 /// Format `ps` rows as a JSON array, one object per row. Hand-rolled
@@ -894,21 +893,11 @@ mod tests {
     }
 
     #[test]
-    fn ps_spill_cell_names_the_paged_process_and_the_device() {
-        assert_eq!(
-            ps_spill_cell(&row_marked(Some(true), 2 * GIB, Some(true))),
-            "PAGED"
-        );
-        assert_eq!(
-            ps_spill_cell(&row_marked(Some(true), 0, Some(false))),
-            "device"
-        );
-        assert_eq!(
-            ps_spill_cell(&row_marked(Some(false), 0, Some(false))),
-            "no"
-        );
-        // "can't tell" must never render as "measured, not spilling".
-        assert_eq!(ps_spill_cell(&row_marked(None, 0, None)), "?");
+    fn paged_verdict_follows_the_device_verdict() {
+        assert_eq!(paged_verdict(None, 2 * GIB), None);
+        assert_eq!(paged_verdict(Some(false), 2 * GIB), Some(false));
+        assert_eq!(paged_verdict(Some(true), 2 * GIB), Some(true));
+        assert_eq!(paged_verdict(Some(true), 48 * MIB), Some(false));
     }
 
     // --- format_ps_table ---
