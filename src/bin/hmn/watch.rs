@@ -370,15 +370,7 @@ fn process_sample(
 /// an acceptable trade-off for a continuously-appended stream (`--json`
 /// is the stable-shape option for scripts).
 fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String {
-    let mut table = Table::new(&[
-        "PID",
-        "NAME",
-        "COMMITTED",
-        "\u{394}COMMIT",
-        "SHARED",
-        "\u{394}SHARED",
-        "SPILL",
-    ]);
+    let mut table = watch_table();
     for r in rows {
         table.push_row(vec![
             r.pid.to_string(),
@@ -394,16 +386,38 @@ fn format_watch_rows_text(elapsed: Duration, rows: &[WatchSampleRow]) -> String 
         ]);
     }
     let time_label = format!("+{:.1}s", elapsed.as_secs_f64());
-    table.render(None, &format!("{time_label:<8}  "))
+    table.render(None, &format!("{time_label:<WATCH_TIME_WIDTH$}  "))
+}
+
+/// The text-mode column set: headers, and the minimum width of each, which
+/// the header line always has and each interval's rows keep unless a cell
+/// is wider — so rows line up under a header printed once, before the loop.
+const WATCH_COLUMNS: [(&str, usize); 7] = [
+    ("PID", 6),
+    ("NAME", 12),
+    ("COMMITTED", 9),
+    ("\u{394}COMMIT", 9),
+    ("SHARED", 9),
+    ("\u{394}SHARED", 9),
+    ("SPILL", 5),
+];
+
+/// Width of the `TIME` column, the rows' prefix (`+12.5s`).
+const WATCH_TIME_WIDTH: usize = 8;
+
+/// An empty table over [`WATCH_COLUMNS`]: the one source of the header
+/// line and of every interval's rows, so the two cannot drift apart.
+#[must_use]
+fn watch_table() -> Table {
+    let headers: Vec<&'static str> = WATCH_COLUMNS.iter().map(|&(h, _)| h).collect();
+    let widths: Vec<usize> = WATCH_COLUMNS.iter().map(|&(_, w)| w).collect();
+    Table::new(&headers).with_min_widths(&widths)
 }
 
 /// Format the watch column header line (text mode), printed once before
 /// the loop starts.
 fn format_watch_header_text() -> String {
-    format!(
-        "{:<8}  {:<6}  {:<12}  {:<9}  {:<9}  {:<9}  {:<9}  {:<5}\n",
-        "TIME", "PID", "NAME", "COMMITTED", "\u{394}COMMIT", "SHARED", "\u{394}SHARED", "SPILL"
-    )
+    watch_table().render(Some(&format!("{:<WATCH_TIME_WIDTH$}  ", "TIME")), "")
 }
 
 /// Format one interval's rows as JSON Lines: one `"kind":"sample"`
@@ -1294,6 +1308,48 @@ mod tests {
         assert!(h.contains("COMMITTED"));
         assert!(h.contains("SHARED"));
         assert!(h.contains("SPILL"));
+    }
+
+    #[test]
+    fn format_watch_header_text_is_unchanged() {
+        // Byte-identical to the fixed-width header v0.2.6-v0.2.12 printed.
+        assert_eq!(
+            format_watch_header_text(),
+            "TIME      PID     NAME          COMMITTED  \u{394}COMMIT    SHARED     \u{394}SHARED    SPILL\n"
+        );
+    }
+
+    #[test]
+    fn format_watch_rows_text_lines_up_under_the_header() {
+        // The askesis report's row: a name and cells narrower than the
+        // header, which drifted left of their columns before v0.2.13.
+        let header = format_watch_header_text();
+        let r = watch_row(
+            15534,
+            Some("canvas"),
+            16 * 1024 * 1024 * 1024,
+            0,
+            0,
+            0,
+            false,
+        );
+        let rows = format_watch_rows_text(Duration::ZERO, &[r]);
+        // Where each word starts, in characters (the header's delta
+        // columns begin with a two-byte `Δ`). Cells hold spaces of their
+        // own (`16.0 GiB`), so a row has more word starts than the header;
+        // every header column must start a word in the row too.
+        let starts = |line: &str| -> Vec<usize> {
+            line.chars()
+                .enumerate()
+                .zip(std::iter::once(' ').chain(line.chars()))
+                .filter(|&((_, c), prev)| c != ' ' && prev == ' ')
+                .map(|((i, _), _)| i)
+                .collect()
+        };
+        let row_starts = starts(&rows);
+        for column in starts(&header) {
+            assert!(row_starts.contains(&column), "{header}{rows}");
+        }
     }
 
     #[test]

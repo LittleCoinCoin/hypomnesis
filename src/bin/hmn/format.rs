@@ -107,7 +107,8 @@ pub fn column_width<'a>(header: &str, cells: impl IntoIterator<Item = &'a str>) 
 /// listing and `hmn watch`'s interval rows and closing per-PID block.
 ///
 /// Each column is as wide as its widest cell or its header ([`column_width`],
-/// so widths are measured in bytes, as they always have been); cells are
+/// so widths are measured in bytes, as they always have been), and at least
+/// its minimum width when one was set ([`Self::with_min_widths`]); cells are
 /// left-aligned, separated by two spaces, and the last column is padded too,
 /// so every line of a table has the same shape.
 pub struct Table {
@@ -116,6 +117,9 @@ pub struct Table {
     /// Data rows, one cell per header. A short row renders its missing
     /// cells as empty; extra cells are ignored.
     rows: Vec<Vec<String>>,
+    /// Minimum width of each column, in header order; a column without an
+    /// entry has none. Empty unless [`Self::with_min_widths`] set it.
+    min_widths: Vec<usize>,
 }
 
 impl Table {
@@ -125,7 +129,19 @@ impl Table {
         Self {
             headers: headers.to_vec(),
             rows: Vec::new(),
+            min_widths: Vec::new(),
         }
+    }
+
+    /// Give each column a minimum width, in header order, so tables
+    /// rendered separately share their columns whenever their cells fit —
+    /// `hmn watch` renders its header once and each interval's rows as a
+    /// table of their own. A cell wider than its minimum still widens its
+    /// column.
+    #[must_use]
+    pub fn with_min_widths(mut self, min_widths: &[usize]) -> Self {
+        self.min_widths = min_widths.to_vec();
+        self
     }
 
     /// Append one data row.
@@ -143,7 +159,10 @@ impl Table {
             .headers
             .iter()
             .enumerate()
-            .map(|(col, header)| column_width(header, self.rows.iter().map(|r| cell(r, col))))
+            .map(|(col, header)| {
+                column_width(header, self.rows.iter().map(|r| cell(r, col)))
+                    .max(self.min_widths.get(col).copied().unwrap_or(0))
+            })
             .collect();
         let mut out = String::new();
         if let Some(prefix) = header_prefix {
@@ -525,6 +544,13 @@ mod tests {
         assert_eq!(spill_cell(Some(false)), "no");
         // "can't tell" must never render as "measured, not spilling".
         assert_eq!(spill_cell(None), "?");
+    }
+
+    #[test]
+    fn table_min_widths_pad_narrow_columns_but_never_truncate() {
+        let mut table = Table::new(&["A", "B"]).with_min_widths(&[4, 2]);
+        table.push_row(vec!["x".to_owned(), "long".to_owned()]);
+        assert_eq!(table.render(Some(""), ""), "A     B   \nx     long\n");
     }
 
     #[test]
