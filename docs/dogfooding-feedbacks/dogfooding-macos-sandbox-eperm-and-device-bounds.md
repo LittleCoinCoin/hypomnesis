@@ -4,7 +4,7 @@
 **Reporter:** field check for issue #3, Apple M3 Pro (arm64), macOS 26.6.2 (25G83), unprivileged uid 501, `hmn 0.2.13` built from `cf5ada0` with `cargo build --release`
 **Severity:** validation of `process_exists` and the v0.2.13 `hmn ps`/`hmn watch` output on macOS + request for sandbox-aware reporting, doc, error-path and JSON/text-cell corrections
 **Affected area:** `metal::list_compute_processes` on `EPERM`; the macOS cross-user doc claim (`hmn --help` Limitations, `metal.rs` and `gpu/mod.rs` docs); `gpu::bounds_check`; `gpu::process_exists` at PID 0; the SPILL/PAGED cells and the `spilled` field where spill does not exist
-**Status:** Proposed — v0.2.14 candidates
+**Status:** Proposed — v0.2.14 candidates. Fix plan: [`docs/roadmap-v0.2.14.md`](../roadmap-v0.2.14.md). Checking this report against the code corrected its account of the silent zero; see *Misreadings recorded*.
 
 ---
 
@@ -24,7 +24,11 @@ does:**
 - Under a sandbox that denies `process-info*` on other processes, a **same-user** Safari gets
   `EPERM`.
 - In that sandbox, `hmn ps` prints `0 GPU processes found.` and exits 0. `hmn watch` exits 2,
-  blaming a missing GPU backend.
+  blaming a missing GPU backend. Both have one cause: the sandbox refuses `proc_listpids`, the
+  call that lists every PID, so the Metal backend gives up and the library reports `NoGpuSource`.
+  `hmn ps` then drops the failed device without a word.
+- A real App Sandbox build behaves the same way. The sandbox still answers `sysctl(KERN_PROC…)`,
+  which lists and names every process, but `hmn` does not use it.
 
 The `None` ("can't tell") branch of `process_exists`, which check 3 was meant to exercise, was
 reached by the probe but never by `hmn`.
@@ -114,12 +118,28 @@ unsandboxed, and the caller's own processes are not readable sandboxed. Whether 
 sandboxed caller was not tested. A sandbox profile applies whatever the uid, so the advice to
 re-run elevated is at best unproven.
 
-The same claim, worded differently, appears in all of these places:
+The kernel source agrees. XNU's `ledger()` (`bsd/kern/sys_generic.c`) returns `ESRCH` when
+`proc_find` fails, then calls only `mac_proc_check_ledger`, which is the sandbox's hook. There is
+no uid check. The crate's own first macOS probe, in May 2026, had already read WindowServer's
+ledger unprivileged. The "cross-user needs root" claim came from `task_for_pid`.
+
+The same claim, worded differently, appears in at least these places:
 
 - `src/bin/hmn/main.rs:169-171` and `:194-196` ("run elevated (`sudo`) to include cross-user PIDs");
 - `src/bin/hmn/ps.rs:505-509`;
 - `src/gpu/metal.rs:5-11`, `:610-613` and `:682-684`;
 - `src/gpu/mod.rs:374-377`.
+
+That was the first count. A second pass found about sixteen sites, among them three in
+`README.md`:
+
+- the capability table's "same-user; `sudo` for cross-user";
+- "libSystem syscalls always succeed on Apple Silicon";
+- Limitations bullet 9.
+
+There are more in `docs/FAQ.md`, in `ROADMAP.md` Principle 4, and in the "re-run elevated" hints,
+which print on macOS too. The full list is in
+[`docs/roadmap-v0.2.14.md`](../roadmap-v0.2.14.md).
 
 ## What `hmn` does under a sandbox — a silent zero
 
@@ -137,22 +157,39 @@ hmn: watch failed to query device 0: no GPU measurement source available (NVML, 
 
 Unsandboxed, the same moment lists WindowServer at 264 MiB, Safari, WebKit and others.
 
-- **`hmn ps` is wrong and says it is right.** `metal::list_compute_processes`
-  (`src/gpu/metal.rs:619-708`) treats a failed `read_graphics_footprint` (`EPERM`, `ESRCH` or
-  absent index) as "skip". Every row disappears and the result is `Some(vec![])`. The
-  `N protected — re-run elevated for names` continuation counts only rows that were *listed*
-  without a name, so it stays silent too.
+- **`hmn ps` is wrong and says it is right.** Under this profile `proc_listpids` itself returns
+  `EPERM`. `metal::list_compute_processes` (`src/gpu/metal.rs:619-708`) gives up and returns
+  `None`, and `gpu_processes(0)` falls through to `NoGpuSource`.
+  - `hmn ps --device 0` shows it: exit 2, with the `NoGpuSource` text.
+  - Without `--device`, `run_ps` skips a device that fails (`src/bin/hmn/ps.rs:403`,
+    `Err(_) => continue`) and prints nothing about it. The table comes out empty, with exit 0.
+    That silence happens on every platform; on macOS this profile is what triggers it.
+  - The `N protected — re-run elevated for names` part of the summary counts only rows that were
+    *listed* without a name, so it stays silent too.
 - **`--exit-status` exits 1, which also means "no match".** A CI gate cannot tell "nothing
   matched" from "nothing was readable".
-- **`hmn watch` blames the wrong cause.** It exits 2 with the `NoGpuSource` text. I did not trace
-  which call fails first.
-- With only `process-info-ledger` denied, so `proc_pidpath` still works, `watch` gets further. It
-  shows WindowServer at `0 MiB` with no notice, because `process_exists` correctly says the PID
-  exists and the row reads 0.
+- **`hmn watch` blames the wrong cause.** It exits 2 with the `NoGpuSource` text. Traced: its
+  first `gpu_processes(device)` call (`src/bin/hmn/watch.rs:1094`) hits the same refused
+  `proc_listpids`, and `NoGpuSource` names four backends macOS doesn't have.
+- **The per-PID silent skip is real, under a narrower profile.** `list_compute_processes`
+  treats a failed `read_graphics_footprint` (`EPERM`, `ESRCH` or absent index) as "skip". With
+  only `process-info-ledger` denied, `proc_listpids` works, every row disappears, and the result is
+  `Some(vec![])`. `hmn ps --device 0` then exits 0 with an empty table. `hmn watch` shows
+  WindowServer at `0 MiB` with no notice, because `process_exists` correctly says the PID exists
+  and the row reads 0.
 
-Who runs `hmn` sandboxed? A library consumer inside an App Sandbox app, or an agent harness that
-wraps tool calls in a Seatbelt profile. Neither was tested here. The profile above is the minimal
-shape of both.
+Who runs `hmn` sandboxed? Measured after the first draft of this report:
+
+| Caller | `proc_listpids` | others' `ledger` | `sysctl kern.proc` | `hmn` 0.2.13 |
+|---|---|---|---|---|
+| unsandboxed | ok | ok | ok | correct |
+| OpenAI Codex's Seatbelt policy (`deny default`, `process-info*` allowed for `same-sandbox`) | ok | ok | `kern.proc.all` denied, `kern.proc.pid` ok | correct |
+| a real App Sandbox (ad-hoc signed `com.apple.security.app-sandbox`) | `EPERM` | `EPERM`, self ok | ok (823 processes, `kernel_task` named) | `0 found`, exit 0 |
+| the profile above (explicit `deny process-info*`) | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit 0 |
+| the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok | `0 found`, exit 0, though the job is readable |
+
+`(deny default)` alone does not deny `process-info`. It takes an explicit `deny`, as some agent
+sandboxes now add to stop argv leaks, or the App Sandbox.
 
 A harsher profile that also denies `process-info*` on **self** crashes `hmn ps` with exit 133
 (`SIGTRAP`). The fault is Apple's, not `hmn`'s: `libdispatch` aborts with `BUG IN LIBDISPATCH:
@@ -227,8 +264,11 @@ removed from the text summary.
    for it. `hmn watch` should report the same cause instead of `NoGpuSource`. **This is the change
    that matters most**: it is the one case where the instrument reports a wrong measurement as a
    correct one. The library side may need a count of `EPERM` skips next to the entries, in
-   whatever shape fits the crate's API.
-2. **Restate the macOS limitation from this evidence, at all seven sites listed above.** The
+   whatever shape fits the crate's API. Before counting, **measure what the sandbox still
+   permits**. When `proc_listpids` is refused, `sysctl(KERN_PROC_ALL)` lists every process, and
+   `ledger` reads of the caller's own sandbox succeed, so an agent's own job could still be
+   measured. Only what stays unreadable after that needs counting.
+2. **Restate the macOS limitation from this evidence, at every site listed above.** The
    readable set is decided by the caller's sandbox, not by process ownership. Unsandboxed, every
    user's processes are readable. Drop or qualify the `sudo` advice until someone tests whether
    it helps a sandboxed caller.
@@ -242,6 +282,8 @@ removed from the text summary.
    `measurable` is false. That changes a persisted JSON contract, so it needs whatever
    compatibility note the crate gives such changes.
 5. **Treat PID 0 as existing on macOS**, or skip the notice for it. kernel_task is always there.
+   `sysctl(KERN_PROC_PID, 0)` returns a record named `kernel_task`, with or without a sandbox, so
+   existence can be answered without a special case.
 
 ## Smaller observations
 
@@ -250,9 +292,12 @@ removed from the text summary.
    does not test a realistic dead PID. 99998 does, and it passes too.
 2. `tests/macos_smoke.rs` has two Metal tests that stay `#[ignore]` under `cargo test
    --all-features`: `device_info_reports_apple_brand` and `process_gpu_info_returns_metal_source`.
-   They were not run here. `cargo test --test macos_smoke -- --ignored` covers them.
+   They were not run in the first pass. `cargo test --test macos_smoke -- --ignored`, run later
+   on the same machine: 2 passed.
 3. Column padding counts `char`s. That is correct for every name seen here; wide CJK or emoji
-   process names would probably misalign. Not tested.
+   process names would probably misalign. Not tested. More precisely, widths are measured in
+   bytes (`format::column_width`) and padded in chars, which stays aligned wherever one char is
+   one column.
 4. **Misreadings recorded.**
    - The first pass explained the `?`/0 MiB `watch` rows for launchd and configd as "the
      ledger/name lookups fail for them". The tool was right: the read succeeds with a zero
@@ -262,6 +307,12 @@ removed from the text summary.
 
    The question that corrected it was whether the parent app's permissions were hiding a prompt.
    Answering it took the controlled sandbox comparison above.
+   - The first draft of this report explained the sandboxed silent zero as per-PID `ledger`
+     skips adding up to `Some(vec![])`. Under its own profile, `proc_listpids` fails first.
+     Running `hmn ps --device 0` in the sandbox (exit 2) would have shown it. The per-PID skip is
+     real, but only under a profile that denies `process-info-ledger` alone. The first draft
+     also listed seven doc sites; a second pass found about sixteen. Both corrections came from
+     checking the report against the code while planning v0.2.14.
 
 ## Acceptance fixtures (already run, free to regress against)
 
@@ -279,6 +330,11 @@ removed from the text summary.
 | `ledger`, sandboxed | ctypes, profile above | — | `EPERM` for 393, 1 **and same-user 2561**; rc 0 for self |
 | sandboxed `ps` | `sandbox-exec -p '<profile>' hmn ps` | an unreadable-list notice, non-zero exit | ❌ `0 GPU processes found.`, exit 0 (request 1) |
 | sandboxed `watch` | `sandbox-exec -p '<profile>' hmn watch 393 …` | the same notice | ❌ `NoGpuSource` text, exit 2 (request 1) |
+| sandboxed `ps --device 0` | `sandbox-exec -p '<profile>' hmn ps --device 0` | the same notice | ❌ `NoGpuSource` text, exit 2: `proc_listpids` refused (request 1) |
+| ledger-only denial | `sandbox-exec -p '(version 1)(allow default)(deny process-info-ledger)' hmn ps --device 0` | the same notice | ❌ `0 GPU processes found.`, exit 0 (request 1) |
+| real App Sandbox | `hmn` built with an embedded `Info.plist`, ad-hoc signed with `com.apple.security.app-sandbox` | the same notice | ❌ `0 found`, exit 0; `--device 0` exit 2 (request 1) |
+| `sysctl` under sandbox | a C probe in the App Sandbox; `ctypes` under the profile above | — | `KERN_PROC_ALL` lists 823 / 969 processes; `KERN_PROC_PID 0` → `kernel_task` |
+| Codex Seatbelt policy | `sandbox-exec -f codex seatbelt_base_policy.sbpl + (allow file-read*)` `hmn ps` | unchanged output | ✅ 20 processes, WindowServer included |
 
 ## Confidence
 
@@ -301,8 +357,9 @@ with `hmn`. `hmn ps`'s own unsandboxed listing of `_windowserver` corroborates t
   TCC grants should not matter. A run from Terminal.app would close this gap.
 - The probe's balance offsets were guessed. Only the zero-balance claims rest on them, and those
   are corroborated by `hmn ps` not listing the PIDs.
-- Untested: `sudo` under a sandbox, a real App Sandbox (as opposed to `sandbox-exec`), and other
-  macOS versions.
+- Untested: `sudo` under a sandbox, and other macOS versions. A real App Sandbox was tested
+  later and behaves like the `sandbox-exec` profile (see *Who runs `hmn` sandboxed?*). XNU's
+  `ledger()` source closes the Terminal.app residual for `ledger` too: it has no TCC path.
 
 ## References
 
@@ -313,6 +370,9 @@ with `hmn`. `hmn ps`'s own unsandboxed listing of `_windowserver` corroborates t
   vs `?`.
 - `docs/roadmap-v0.2.13.md`; FAQ "What does a `?` in the NAME column mean"; README
   "macOS UMA semantics"
+- [`docs/roadmap-v0.2.14.md`](../roadmap-v0.2.14.md): the fix plan for these requests, with the
+  full doc-site list.
+- XNU `bsd/kern/sys_generic.c`, `ledger()`: the `mac_proc_check_ledger` hook, with no uid check.
 - Findings briefing and evidence: `__reports__/field_check_v0213/01-findings_v1.md` and
   `__reports__/field_check_v0213/evidence/`. The probes are `probes/p.py` (`proc_pidpath`),
   `probes/l.py` (`ledger` scan) and `probes/sandbox_probe.py` (sandbox on/off).

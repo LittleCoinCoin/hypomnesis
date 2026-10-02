@@ -92,7 +92,7 @@ explicit `(deny process-info…)`, or the App Sandbox:
 |---|---|---|---|---|---|
 | unsandboxed | ok | ok | ok | ok | correct |
 | Codex Seatbelt policy | ok | ok | ok | `kern.proc.all` denied, `kern.proc.pid` ok | correct |
-| App Sandbox | `EPERM` | `EPERM` (self ok) | `EPERM` | not yet measured in-app | `0 found`, exit `0` |
+| App Sandbox | `EPERM` | `EPERM` (self ok) | ok | ok (823 processes, `kernel_task` named) | `0 found`, exit `0` |
 | explicit `deny process-info*` (the report's profile; agent sandboxes that deny it to stop argv leaks) | `EPERM` | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit `0` |
 | the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok for them | ok | `0 found`, exit `0`, though the job is readable |
 | `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" |
@@ -227,7 +227,7 @@ that reads each PID separately, so it is the one where some rows can go missing.
 | 7 | `n/a` vs `?` in SPILL and `PAGED` cells (request 4, cells) | fix | ⬜ |
 | 8 | The macOS limitation restated from evidence, one canonical statement (request 2) | docs | ⬜ |
 | 9 | `spilled: null` notice and `ROADMAP.md` v0.3.0 entries (request 4, JSON) | docs | ✅ notice written |
-| 10 | Correct the field report's F5 mechanism and site list, before the issue comment | docs | ⬜ |
+| 10 | Correct the field report's F5 mechanism and site list, before the issue comment | docs | ✅ |
 | 11 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ⬜ |
 
 Items 3, 4 and 6 get an adversarial review before they merge. They change what the instrument
@@ -245,7 +245,9 @@ To be filled in as items land. These fixtures must be re-run:
   - `same-sandbox` allowed: the job listed **with its bytes**, plus the unreadable count;
   - pidinfo denied: names, not `?`;
   - unsandboxed and the Codex policy: output unchanged;
-- the App Sandbox build, including `KERN_PROC_ALL` inside it;
+- the App Sandbox build. Inside it, `KERN_PROC_ALL` and `KERN_PROC_PID` were already measured
+  working (a C probe, 2026-10-02); after the change, `hmn ps` there must exit `2` with the
+  denial, since only the caller's own `ledger` is readable;
 - `hmn ps --device 1` → `device index 1 out of range (have 1 devices)`;
 - `hmn watch 0` → no warning;
 - `cargo test --test macos_smoke -- --ignored` (2/2 at `cf5ada0`).
@@ -266,6 +268,25 @@ stop at 99999, and on Linux `pid_max` can exceed 999999.
 ## Consistency pass
 
 To be run with fresh eyes after the last commit.
+
+---
+
+## Open questions for the maintainer
+
+Raised with the issue #3 reply, before any of this is built:
+
+- **Is this wanted now?** All eight checks of issue #3 pass. Everything here comes from a context
+  the checklist did not cover: a caller inside a sandbox that explicitly denies `process-info`, or
+  an App Sandbox app. Every earlier test ran unsandboxed, and Codex's policy is not affected. The
+  release could ship in full, ship only the cross-platform and documentation parts (items 1, 2,
+  5, 7, 8), or wait.
+- **API names.** `gpu_process_listing`, `GpuProcessListing { entries, denied_pids }` and
+  `HypomnesisError::ProcessListDenied { denied }` are working names.
+- **The remedy wording.** `N unreadable — re-run outside the sandbox` copies the Windows
+  `N protected — re-run elevated for names`. Inside an App Sandbox app there is no "outside", so
+  for library consumers the count matters more than the advice.
+- **Still to check by hand:** `sudo` under a sandbox, and one run from Terminal.app (a fresh
+  responsible process). The commands are in the issue reply.
 
 ---
 
