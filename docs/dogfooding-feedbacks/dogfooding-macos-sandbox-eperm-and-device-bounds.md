@@ -114,9 +114,10 @@ rc, errno)`. That is 0 `EPERM` among 920 PIDs, and one cross-user process exited
 own PID.
 
 This turns the doc claim around in both directions. Another user's process is readable
-unsandboxed, and the caller's own processes are not readable sandboxed. Whether `sudo` helps a
-sandboxed caller was not tested. A sandbox profile applies whatever the uid, so the advice to
-re-run elevated is at best unproven.
+unsandboxed, and the caller's own processes are not readable sandboxed. `sudo` does not help a
+sandboxed caller. Measured on 2026-10-02 with
+`sudo sandbox-exec -p '<profile>' hmn ps --device 0`, the root run gets the same `NoGpuSource`
+text and exit 2 as the unprivileged one. The advice to re-run elevated is wrong on macOS.
 
 The kernel source agrees. XNU's `ledger()` (`bsd/kern/sys_generic.c`) returns `ESRCH` when
 `proc_find` fails, then calls only `mac_proc_check_ledger`, which is the sandbox's hook. There is
@@ -334,6 +335,8 @@ removed from the text summary.
 | ledger-only denial | `sandbox-exec -p '(version 1)(allow default)(deny process-info-ledger)' hmn ps --device 0` | the same notice | ❌ `0 GPU processes found.`, exit 0 (request 1) |
 | real App Sandbox | `hmn` built with an embedded `Info.plist`, ad-hoc signed with `com.apple.security.app-sandbox` | the same notice | ❌ `0 found`, exit 0; `--device 0` exit 2 (request 1) |
 | `sysctl` under sandbox | a C probe in the App Sandbox; `ctypes` under the profile above | — | `KERN_PROC_ALL` lists 823 / 969 processes; `KERN_PROC_PID 0` → `kernel_task` |
+| `sudo` under the profile | `sudo sandbox-exec -p '<profile>' hmn ps --device 0` | — | `NoGpuSource` text, exit 2: root is refused too |
+| from Terminal.app, unsandboxed | `hmn ps`; `sandbox_probe.py` | unchanged output | ✅ 26 processes; `ledger` rc 0 for 393, 1, 2561; responsible PID = Terminal |
 | Codex Seatbelt policy | `sandbox-exec -f codex seatbelt_base_policy.sbpl + (allow file-read*)` `hmn ps` | unchanged output | ✅ 20 processes, WindowServer included |
 
 ## Confidence
@@ -350,16 +353,24 @@ binary, same PIDs, same responsible app, sandbox on or off. A same-user PID flip
 other-user PIDs read fine. The independent signal is direct `ctypes` syscalls that share no code
 with `hmn`. `hmn ps`'s own unsandboxed listing of `_windowserver` corroborates them.
 
+**Residuals closed after the first draft (2026-10-02), by measurement:**
+
+- **Responsible process.** The first runs all had the Claude Code app as responsible process. A
+  run from Terminal.app (responsible PID 68779, Terminal itself) gives the same result unsandboxed:
+  - `ledger` and `proc_pidpath` are rc 0 for WindowServer (393), launchd (1) and Safari (2561);
+  - `hmn ps` lists 26 processes, among them WindowServer at 328 MiB and loginwindow.
+
+  XNU's `ledger()` agrees: it has no TCC path.
+- **`sudo` under a sandbox.** Root under the same profile is refused like uid 501:
+  `hmn ps --device 0` prints the `NoGpuSource` text and exits 2.
+- **A real App Sandbox** behaves like the `sandbox-exec` profile (see *Who runs `hmn`
+  sandboxed?*).
+
 **Residual, reasoning rather than measurement:**
 
-- The unsandboxed runs all had the Claude Code app as responsible process. The `ledger` and
-  `proc_pidpath` checks are kernel MAC hooks, the Sandbox policy's, not TCC prompts, so a parent's
-  TCC grants should not matter. A run from Terminal.app would close this gap.
 - The probe's balance offsets were guessed. Only the zero-balance claims rest on them, and those
   are corroborated by `hmn ps` not listing the PIDs.
-- Untested: `sudo` under a sandbox, and other macOS versions. A real App Sandbox was tested
-  later and behaves like the `sandbox-exec` profile (see *Who runs `hmn` sandboxed?*). XNU's
-  `ledger()` source closes the Terminal.app residual for `ledger` too: it has no TCC path.
+- Untested: other macOS versions.
 
 ## References
 

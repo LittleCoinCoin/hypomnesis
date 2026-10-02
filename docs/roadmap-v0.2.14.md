@@ -285,8 +285,11 @@ Raised with the issue #3 reply, before any of this is built:
 - **The remedy wording.** `N unreadable — re-run outside the sandbox` copies the Windows
   `N protected — re-run elevated for names`. Inside an App Sandbox app there is no "outside", so
   for library consumers the count matters more than the advice.
-- **Still to check by hand:** `sudo` under a sandbox, and one run from Terminal.app (a fresh
-  responsible process). The commands are in the issue reply.
+- **Checked by hand, 2026-10-02:**
+  - `sudo` under the report's profile is refused like uid 501 (exit `2`), so the macOS docs drop
+    the `sudo` advice on measurement, not only on reasoning;
+  - run from Terminal.app as responsible process, unsandboxed, `hmn ps` lists 26 processes,
+    WindowServer included.
 
 ---
 
