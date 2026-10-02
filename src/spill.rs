@@ -983,7 +983,7 @@ mod tests {
         assert!(!state.latched);
         assert!(!state.currently);
         let report = state_into_report(state, true);
-        assert!(report.episodes.is_empty());
+        assert!(report.episodes.is_empty(), "{:?}", report.episodes);
         assert!(!report.spilled());
     }
 
@@ -995,7 +995,7 @@ mod tests {
         let state = drive(&[("t0", RELAXED, BASELINE), ("t1", RELAXED, BASELINE)]);
         assert!(!state.latched);
         let report = state_into_report(state, true);
-        assert!(report.episodes.is_empty());
+        assert!(report.episodes.is_empty(), "{:?}", report.episodes);
     }
 
     #[test]

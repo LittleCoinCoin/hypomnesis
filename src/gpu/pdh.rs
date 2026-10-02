@@ -1358,7 +1358,7 @@ mod tests {
     fn parse_multi_string_empty() {
         let buf: Vec<u16> = vec![0, 0];
         let parsed = parse_multi_string(&buf);
-        assert!(parsed.is_empty());
+        assert!(parsed.is_empty(), "{parsed:?}");
     }
 
     #[test]

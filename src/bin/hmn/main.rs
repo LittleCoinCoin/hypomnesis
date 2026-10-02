@@ -621,7 +621,7 @@ mod tests {
         let Some(Commands::Ps { filters, .. }) = cli.command else {
             panic!("expected Ps subcommand");
         };
-        assert!(filters.is_empty());
+        assert!(filters.is_empty(), "{filters:?}");
     }
 
     #[test]
@@ -752,8 +752,8 @@ mod tests {
         else {
             panic!("expected Watch subcommand");
         };
-        assert!(pids.is_empty());
-        assert!(filters.is_empty());
+        assert!(pids.is_empty(), "{pids:?}");
+        assert!(filters.is_empty(), "{filters:?}");
         assert_eq!(min, None);
         assert_eq!(interval, Duration::from_secs(5));
         assert_eq!(duration, None);

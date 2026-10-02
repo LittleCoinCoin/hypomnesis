@@ -1348,7 +1348,8 @@ mod tests {
 
     #[test]
     fn select_top_n_pids_empty_rows() {
-        assert!(select_top_n_pids(&[], 5).is_empty());
+        let top = select_top_n_pids(&[], 5);
+        assert!(top.is_empty(), "{top:?}");
     }
 
     #[test]
@@ -1929,8 +1930,12 @@ mod tests {
     #[test]
     fn selection_empty_rows_and_explicit_is_empty() {
         let selected = auto(5, false, &[]).select(&[], &WatchState::new());
-        assert!(selected.pids.is_empty());
-        assert!(selected.unmatchable.is_empty());
+        assert!(selected.pids.is_empty(), "{:?}", selected.pids);
+        assert!(
+            selected.unmatchable.is_empty(),
+            "{:?}",
+            selected.unmatchable
+        );
     }
 
     #[test]
@@ -2010,12 +2015,8 @@ mod tests {
             auto(5, true, &["train"]).select(&rows, &state).pids,
             vec![3, 2]
         );
-        assert!(
-            auto(5, true, &["nope"])
-                .select(&rows, &state)
-                .pids
-                .is_empty()
-        );
+        let none = auto(5, true, &["nope"]).select(&rows, &state).pids;
+        assert!(none.is_empty(), "{none:?}");
     }
 
     #[cfg(feature = "test-helpers")]
@@ -2040,7 +2041,7 @@ mod tests {
         let rows = vec![entry(9, Some("[protected]"), 4_000, 0)];
         let got = auto(3, true, &["train"]).select(&rows, &state);
         assert_eq!(got.pids, vec![9]);
-        assert!(got.unmatchable.is_empty());
+        assert!(got.unmatchable.is_empty(), "{:?}", got.unmatchable);
     }
 
     #[cfg(feature = "test-helpers")]
@@ -2067,7 +2068,7 @@ mod tests {
         let rows = vec![entry(1, Some("[protected]"), 1_000, 0)];
         let got = auto(3, true, &[]).select(&rows, &WatchState::new());
         assert_eq!(got.pids, vec![1]);
-        assert!(got.unmatchable.is_empty());
+        assert!(got.unmatchable.is_empty(), "{:?}", got.unmatchable);
     }
 
     #[test]
@@ -2162,7 +2163,8 @@ mod tests {
             ["hmn watch: pid=999999 names no running process; its rows will read 0 MiB"]
         );
         // Auto-selection has no explicit PIDs: nothing to warn about.
-        assert!(missing_pid_notices(&[], &listed, |_| Some(false)).is_empty());
+        let notices = missing_pid_notices(&[], &listed, |_| Some(false));
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     #[test]
@@ -2253,7 +2255,8 @@ mod tests {
             ["hmn.exe", "watch", "--filter", "some/dir"]
         );
         assert_eq!(recorded_argv([std::ffi::OsString::from("hmn")]), ["hmn"]);
-        assert!(recorded_argv(Vec::<std::ffi::OsString>::new()).is_empty());
+        let recorded = recorded_argv(Vec::<std::ffi::OsString>::new());
+        assert!(recorded.is_empty(), "{recorded:?}");
     }
 
     #[test]

@@ -979,12 +979,14 @@ mod tests {
 
     #[test]
     fn filter_process_rows_empty_input_empty_output() {
-        assert!(filter_process_rows(&[], DEVICE_TOTAL).is_empty());
+        let kept = filter_process_rows(&[], DEVICE_TOTAL);
+        assert!(kept.is_empty(), "{kept:?}");
     }
 
     #[test]
     fn filter_process_rows_all_rows_dropped_when_all_garbage() {
         let infos = [info(1, u64::MAX), info(2, DEVICE_TOTAL + 1)];
-        assert!(filter_process_rows(&infos, DEVICE_TOTAL).is_empty());
+        let kept = filter_process_rows(&infos, DEVICE_TOTAL);
+        assert!(kept.is_empty(), "{kept:?}");
     }
 }

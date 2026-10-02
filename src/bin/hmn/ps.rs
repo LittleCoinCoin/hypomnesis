@@ -715,7 +715,8 @@ mod tests {
             f.judge(&entry(2, None, 8 << 30, 1 << 30)),
             PsJudgement::Listed
         );
-        assert!(f.clauses().is_empty());
+        let clauses = f.clauses();
+        assert!(clauses.is_empty(), "{clauses:?}");
     }
 
     #[cfg(feature = "test-helpers")]
