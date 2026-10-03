@@ -4,7 +4,7 @@
 **Reporter:** field check for issue #3, Apple M3 Pro (arm64), macOS 26.6.2 (25G83), unprivileged uid 501, `hmn 0.2.13` built from `cf5ada0` with `cargo build --release`
 **Severity:** validation of `process_exists` and the v0.2.13 `hmn ps`/`hmn watch` output on macOS + request for sandbox-aware reporting, doc, error-path and JSON/text-cell corrections
 **Affected area:** `metal::list_compute_processes` on `EPERM`; the macOS cross-user doc claim (`hmn --help` Limitations, `metal.rs` and `gpu/mod.rs` docs); `gpu::bounds_check`; `gpu::process_exists` at PID 0; the SPILL/PAGED cells and the `spilled` field where spill does not exist
-**Status:** Proposed — v0.2.14 candidates. Fix plan: [`docs/roadmap-v0.2.14.md`](../roadmap-v0.2.14.md). Checking this report against the code corrected its account of the silent zero; see *Misreadings recorded*.
+**Status:** Accepted — v0.2.14, in three PRs (docs; cross-platform fixes; sandbox measurement), per [the maintainer's reply on issue #3](https://github.com/mi-for-the-rust-of-us/hypomnesis/issues/3#issuecomment-5947395182). Fix plan and PR split: [`docs/roadmap-v0.2.14.md`](../roadmap-v0.2.14.md). Checking this report against the code corrected its account of the silent zero; see *Misreadings recorded*.
 
 ---
 
