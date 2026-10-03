@@ -54,7 +54,7 @@ OUTWARD ACTIONS: pushing a branch, opening a PR and posting a comment each need 
 ```mermaid
 graph TD
     docs_pr[PR A: docs-only, report and amended plan]:::done
-    part1[PR B: part 1, cross-platform fixes and docs]:::planned
+    part1[PR B: part 1, cross-platform fixes and docs]:::inprogress
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -66,7 +66,7 @@ graph TD
 | Node | Type | Status |
 |:-----|:-----|:-------|
 | `docs_pr.md` | 📄 Leaf Task | ✅ Done |
-| `part1/` | 📁 Directory | ⬜ Planned |
+| `part1/` | 📁 Directory | 🔄 In Progress |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |

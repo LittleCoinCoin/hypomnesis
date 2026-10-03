@@ -25,12 +25,12 @@ The canonical limitation statement must not promise "measures what is permitted 
 ## Status
 ```mermaid
 graph TD
-    metal_bounds_check[Item 1: Metal arm in bounds_check]:::planned
-    process_exists_kinfo[Item 2: process_exists through kinfo_proc]:::planned
-    ps_failed_devices[Item 5: ps states skipped devices, exits 2 when all failed]:::planned
-    spill_cell_na[Item 7: n/a vs ? in SPILL and PAGED cells]:::planned
+    metal_bounds_check[Item 1: Metal arm in bounds_check]:::inprogress
+    process_exists_kinfo[Item 2: process_exists through kinfo_proc]:::inprogress
+    ps_failed_devices[Item 5: ps states skipped devices, exits 2 when all failed]:::inprogress
+    spill_cell_na[Item 7: n/a vs ? in SPILL and PAGED cells]:::inprogress
     close[Part 1 close]:::planned
-    remedy_macos[Item 6 pulled forward: macOS remedy text]:::planned
+    remedy_macos[Item 6 pulled forward: macOS remedy text]:::inprogress
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -41,12 +41,12 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `metal_bounds_check.md` | 📄 Leaf Task | ⬜ Planned |
-| `process_exists_kinfo.md` | 📄 Leaf Task | ⬜ Planned |
-| `ps_failed_devices.md` | 📄 Leaf Task | ⬜ Planned |
-| `spill_cell_na.md` | 📄 Leaf Task | ⬜ Planned |
+| `metal_bounds_check.md` | 📄 Leaf Task | 🔄 In Progress |
+| `process_exists_kinfo.md` | 📄 Leaf Task | 🔄 In Progress |
+| `ps_failed_devices.md` | 📄 Leaf Task | 🔄 In Progress |
+| `spill_cell_na.md` | 📄 Leaf Task | 🔄 In Progress |
 | `close/` | 📁 Directory | ⬜ Planned |
-| `remedy_macos.md` | 📄 Leaf Task | ⬜ Planned |
+| `remedy_macos.md` | 📄 Leaf Task | 🔄 In Progress |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
