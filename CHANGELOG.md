@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The SPILL and per-PID `PAGED` cells read `n/a` on Linux and macOS** (`src/bin/hmn/format.rs`,
+  `ps.rs`, `watch.rs`) — where spill cannot exist, `hmn ps`'s and `hmn watch`'s SPILL cell and
+  `hmn watch`'s closing per-PID `PAGED` cell now say `n/a` instead of `?`, which also means an
+  unresolved name in NAME. `?` stays on Windows, where spill exists but cannot be read now
+  (pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, a build without `pdh`). The platform is
+  decided at compile time through one core, `format::spill_cell_for`, that both cells share.
+  Text output only: `--json` keeps `null`. From the v0.2.13 macOS field check, finding F6
+  ([`__reports__/field_check_v0213/01-findings_v1.md`](__reports__/field_check_v0213/01-findings_v1.md)).
+
 ### Fixed
 
 - **`hmn ps --device 1` on an Apple Silicon Mac says the index is out of range**

@@ -203,11 +203,15 @@ who caused the pressure. **This is not equivalent to `hmn watch`'s verdict for t
 instant** — a workload whose own baseline shared usage already sits above 256 MiB (an unusually
 large staging heap) reads as spilling here and correctly `no` there once its baseline is
 subtracted. `null`
-(`?` in the text table) means spill isn't measurable at all — non-Windows, built without the
-`pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, or the adapter's dedicated
-capacity itself coming back unassessable — and is never collapsed into `false`/`no`, so a script
-checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". `hmn
-watch`'s own SPILL column/`spilling` field carries the identical `null`/`?` honesty (since
+means spill isn't measurable at all, and is never collapsed into `false`/`no`, so a script
+checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". The text
+table tells the two kinds of "can't tell" apart (since v0.2.14): it shows
+`n/a` on Linux and macOS, where spill cannot exist, and `?` on Windows, where spill exists but
+cannot be read now — built without the `pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a
+`PDH` hiccup, or the adapter's dedicated capacity itself coming back unassessable; `--json` says
+`null` for all of them. CUDA managed-memory oversubscription is not measured either, so `n/a`
+on Linux means "this tool does not measure it", not "nothing is oversubscribed". `hmn watch`'s
+own SPILL column/`spilling` field carries the identical `null`/`n/a` or `?` honesty (since
 v0.2.11) for its own unmeasurable case — no tracker constructed, or `SpillTracker::is_measurable()`
 false for this run — so the two commands never disagree about what "can't tell" looks like, only
 about what "spilling" itself means (instantaneous floor vs. growth-over-baseline). Reach for
@@ -243,7 +247,7 @@ need no `cfg`), but `is_spill_measurable()` returns `false`, `observe()` is a
 no-op, and `hmn spill` runs your command then prints *"spill not measurable on
 this platform"* instead of a misleading all-zeros report. `hmn watch`'s closing
 summary says the same since v0.2.13 (before, it printed the all-zeros report,
-ending in `no spill observed`), and its SPILL column shows `?`. In `--json` output,
+ending in `no spill observed`), and its SPILL column shows `n/a`. In `--json` output,
 check `measurable` before trusting `spilled: false`.
 
 ## What does a `?` in the NAME column mean — and when do I need elevation?

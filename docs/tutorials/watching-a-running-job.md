@@ -47,9 +47,9 @@ cargo install hypomnesis
 ```
 
 On Linux/macOS `hmn watch` still attaches and shows real per-PID `VRAM`
-deltas, but spill is not measurable there: the SPILL column shows `?`, and
-the closing summary says `spill not measurable on this platform` in place of
-the spill report (see the
+deltas, but spill is not measurable there: the SPILL column shows
+`n/a` on Linux and macOS, and the closing summary says
+`spill not measurable on this platform` in place of the spill report (see the
 [FAQ](../FAQ.md#why-is-everything-spill-related-0--false-on-linux-and-macos)).
 
 ## Step 1 — Attach
