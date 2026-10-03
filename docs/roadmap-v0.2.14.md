@@ -3,7 +3,9 @@
 > *Measure what a sandbox allows, say what it forbids, and stop reporting an unreadable list as
 > an empty one.*
 
-**Status: in progress.** Not pushed; no version bump until release.
+**Status: accepted — shipping as three PRs.** The maintainer approved implementation on
+2026-10-02 ([issue #3 comment](https://github.com/mi-for-the-rust-of-us/hypomnesis/issues/3#issuecomment-5947395182));
+PR A, this documentation, goes first (see *PR split*), and there is no version bump until release.
 
 ---
 
@@ -21,14 +23,16 @@ fields land in patch releases. Type-shape changes … are minor bumps, never pat
   where spill cannot exist, an `unreadable` part on the `hmn ps` summary line, and a
   platform-correct remedy in place of "re-run elevated" on macOS.
 
-Three behaviour changes are deliberate. Each turns a silent wrong answer into a stated one:
+Four behaviour changes are deliberate. Each turns a silent wrong answer into a stated one:
 
 - `gpu_processes` returns an error, not an empty list, when the process list was enumerated but
   no process other than the caller's could be read;
 - `hmn ps` exits `2` when every device it tried failed, where it now prints an empty table and
   exits `0`;
 - `hmn ps --exit-status` exits `2` ("can't tell") rather than `1` ("nothing matched") when nothing
-  is listed and some processes could not be read.
+  is listed and some processes could not be read;
+- `hmn ps --exit-status` also exits `2`, not `1`, when nothing is listed and a
+  tried device failed.
 
 One request is **not** in this release: making the JSON `spilled` field `null` when spill is not
 measurable. It changes a `bool` into a `bool` or `null` on the wire, a type-shape change, so it
@@ -96,6 +100,7 @@ explicit `(deny process-info…)`, or the App Sandbox:
 | explicit `deny process-info*` (the report's profile; agent sandboxes that deny it to stop argv leaks) | `EPERM` | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit `0` |
 | the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok for them | ok | `0 found`, exit `0`, though the job is readable |
 | `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" |
+| Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | not yet measured | not yet measured | not yet measured | not yet measured | not yet measured |
 
 **Why Windows never showed it.** PDH on Windows, and NVML on Linux, return every process's VRAM
 from one system-wide query, with no permission check per process. Only names can be refused there,
@@ -122,6 +127,23 @@ that reads each PID separately, so it is the one where some rows can go missing.
   the record, so the enumeration fallback gets names in the same pass. Record parsing and errno
   classification are pure functions with unit tests, the way `proc_name.rs` tests its own; the
   sandbox paths cannot be unit-tested any other way.
+- **The 648-byte `kinfo_proc` layout, and where it was checked.** Measured 2026-10-02 on the M3
+  Pro (macOS 26.6.2, SDK 26.2) and re-run 2026-10-03; the programs and their verbatim output are
+  in [`__reports__/field_check_v0213/evidence/kinfo_proc_layout.md`](../__reports__/field_check_v0213/evidence/kinfo_proc_layout.md).
+  - arm64, natively: `sizeof(struct kinfo_proc)` is 648, `p_pid` sits at offset 40 and `p_comm`
+    at offset 243 (17 bytes with the NUL). A live `KERN_PROC_PID` read of PID 1 returns one
+    648-byte record named `launchd`, and `KERN_PROC_ALL` returns a whole number of records.
+  - x86_64, against the SDK header: the same `sizeof`/`offsetof` program compiled with
+    `clang -arch x86_64` prints 648, 40 and 243. The same live reads, run as an x86_64 process
+    under Rosetta 2, give the same lengths.
+  - x86_64, by test: `cargo test --target x86_64-apple-darwin --lib` under Rosetta 2 is a PR B
+    check. It covers the parser's unit tests and one live read. Until it passes, the x86_64 claim
+    covers the layout only.
+  - Not verified: a native Intel Mac.
+    Rosetta 2 runs x86_64 userland on the arm64 kernel, so it cannot show what an
+    Intel kernel returns, and `ROADMAP.md` lists Apple Metal on Intel Macs as untested hardware
+    (Principle 3, no Intel-Mac test hardware). This release changes neither, so the whole-records
+    length check stays the parser's only guard against a layout that differs.
 - **A per-PID read has four outcomes, not two.** `read_graphics_footprint` stops folding
   everything into `None`. It returns bytes; *denied* (`EPERM`); *gone* (`ESRCH`); or
   *unavailable*, when the `graphics_footprint` template index did not resolve. *Unavailable*, or
@@ -171,7 +193,8 @@ that reads each PID separately, so it is the one where some rows can go missing.
   device without `--device` stays, as v0.2.13 decided, so one broken device does not hide the
   others. It now gets a stderr line. When every device tried has failed, `hmn ps` exits `2`. When
   no device was tried at all (`device_count` failing on a GPU-less runner), it keeps today's empty
-  table and exit `0`.
+  table and exit `0`. With `--exit-status`, nothing listed and a
+  tried device failed is also `2` (see *Decisions taken*).
 - **`hmn ps` and `hmn watch` report a partial denial.**
   - `ps`: `SummaryNotes` gains `unreadable`. `--pid` applies to denied PIDs the way `judge`
     applies it to rows (`ps.rs:260`), so `hmn ps --pid N` does not report hundreds of unrelated
@@ -222,8 +245,8 @@ that reads each PID separately, so it is the one where some rows can go missing.
 | 2 | `process_exists` through the lookup rule: PID 0, sandboxed callers (request 5) | **fix** | ⬜ |
 | 3 | `sysctl kern.proc` enumeration and `p_comm` names when libproc is refused; four-outcome ledger read (request 1) | feature | ⬜ |
 | 4 | `gpu_process_listing`, `denied_pids`, `ProcessListDenied` (request 1) | feature | ⬜ |
-| 5 | `hmn ps` states a skipped device and exits `2` when every device failed (request 1) | **fix** | ⬜ |
-| 6 | `unreadable` counts, the platform remedy, `--exit-status` `2`, `watch` notices (request 1) | feature | ⬜ |
+| 5 | `hmn ps` states a skipped device; exits `2` when every device failed, and under `--exit-status` when one failed and nothing is listed (request 1) | **fix** | ⬜ |
+| 6 | `unreadable` counts, `--exit-status` `2`, `watch` notices (request 1); the platform remedy ships in PR B | feature | ⬜ |
 | 7 | `n/a` vs `?` in SPILL and `PAGED` cells (request 4, cells) | fix | ⬜ |
 | 8 | The macOS limitation restated from evidence, one canonical statement (request 2) | docs | ⬜ |
 | 9 | `spilled: null` notice and `ROADMAP.md` v0.3.0 entries (request 4, JSON) | docs | ✅ notice written |
@@ -236,12 +259,39 @@ README and FAQ text it makes stale, as in v0.2.13. Item 11 covers what remains.
 
 ---
 
+## PR split
+
+| PR | Contents | Scope items | Notes |
+|---|---|---|---|
+| A | docs only: the dogfooding report, this roadmap, the `ROADMAP.md` entries, `__reports__/field_check_v0213/` | 9, 10, the planning half of 11 | `__reports__/` is dropped at release, as `f3c6010` did |
+| B | cross-platform fixes and docs, plus the macOS remedy `N protected — re-run outside the sandbox`, pulled forward from item 6 | 1, 2, 5, 7, 8 and their share of 11 | the `sudo` advice and the cross-user claim removed; item 5's silent wrong answer (a failing device dropped without a word, on every platform) stated; `--exit-status` `2` on a partial device failure |
+| C | measuring inside a sandbox | 3, 4, 6 and the rest of 11 | new FFI and new public API, so it gets the adversarial review *Scope* asks for; the remedy text itself is already in B |
+
+Each part can ship alone as its own release. Part 1 (PR B) goes first. Part 2 (PR C) reuses part
+1's `kinfo_proc` parser (item 2), so it merges second, and whichever release ships alone must have
+docs that describe only its own behaviour.
+
+- **CI.** Item 5's "every device failed → exit 2" may change what `tests/cli_ps.rs` sees on
+  GitHub's `macos-latest` runners, which are VMs. The denial line differs by PR:
+  - PR B's test accepts exit `2` only together with a device line ending `(skipped)`, that is
+    `hmn: ps failed to query device N: <err> (skipped)`;
+  - PR C's accepts it only when that skip line carries `process list unreadable:`, or, on a VM
+    whose ledger template does not resolve, the `NoGpuSource` text, under its own label in the
+    test output.
+
+  The change is not relied on until `gh pr checks` shows both `macos-latest` jobs passing on the
+  PR's own CI, as the maintainer asked on issue #3.
+
+---
+
 ## Verification
 
 To be filled in as items land. These fixtures must be re-run:
 
 - every row of the *When it bites* table, with `sandbox-exec` and the same profiles:
-  - the report's profile: exit `2` with the count and the remedy;
+  - the report's profile:
+    - PR B: exit `2` with the skip line `hmn: ps failed to query device 0: … (skipped)`;
+    - PR C: exit `2` with the count and the remedy;
   - `same-sandbox` allowed: the job listed **with its bytes**, plus the unreadable count;
   - pidinfo denied: names, not `?`;
   - unsandboxed and the Codex policy: output unchanged;
@@ -252,12 +302,18 @@ To be filled in as items land. These fixtures must be re-run:
 - `hmn watch 0` → no warning;
 - `cargo test --test macos_smoke -- --ignored` (2/2 at `cf5ada0`).
 
-Gate set on every commit:
+Gate set on every pushed commit (a test-first red commit is squashed into its green successor
+before a branch is pushed):
 
 - `cargo fmt --check`;
 - clippy with and without `--all-features`, and for `x86_64-unknown-linux-gnu`;
 - `cargo test --locked --all-features`;
-- `cargo doc` with `-D warnings`.
+- `cargo doc` with `-D warnings`;
+- `cargo +1.88 check --locked --all-features` (MSRV);
+- `cargo +1.88 clippy --locked --all-targets --all-features -- -D warnings` (CI's 1.88 leg);
+- `cargo +1.88 test --locked --all-features` (CI's 1.88 leg);
+- `cargo check --locked --no-default-features` (`ci.yml`);
+- `cargo check --locked --no-default-features --features nvml,dxgi,pdh` (`ci.yml`).
 
 `tests/cli_ps.rs` accepts exit `2` only together with the denial line, since agents run
 `cargo test` inside sandboxes too. Future field checklists use a realistic dead PID: macOS PIDs
@@ -271,25 +327,43 @@ To be run with fresh eyes after the last commit.
 
 ---
 
-## Open questions for the maintainer
+## Decisions taken
 
-Raised with the issue #3 reply, before any of this is built:
+Raised with the issue #3 reply, answered in the maintainer's comment of 2026-10-02:
 
-- **Is this wanted now?** All eight checks of issue #3 pass. Everything here comes from a context
-  the checklist did not cover: a caller inside a sandbox that explicitly denies `process-info`, or
-  an App Sandbox app. Every earlier test ran unsandboxed, and Codex's policy is not affected. The
-  release could ship in full, ship only the cross-platform and documentation parts (items 1, 2,
-  5, 7, 8), or wait.
-- **API names.** `gpu_process_listing`, `GpuProcessListing { entries, denied_pids }` and
-  `HypomnesisError::ProcessListDenied { denied }` are working names.
-- **The remedy wording.** `N unreadable — re-run outside the sandbox` copies the Windows
-  `N protected — re-run elevated for names`. Inside an App Sandbox app there is no "outside", so
-  for library consumers the count matters more than the advice.
+- **Wanted now: yes, "in two parts",** as PRs against `main`: part 1 is the cross-platform fixes
+  and docs (items 1, 2, 5, 7, 8), part 2 is measuring inside a sandbox (items 3, 4, 6). They can
+  ship together or separately; part 1 goes first, since it takes the false statements out of
+  `--help` soonest. See *PR split*.
+- **API names fixed:** `gpu_process_listing`, `GpuProcessListing { entries, denied_pids }` and
+  `HypomnesisError::ProcessListDenied { denied }`. The maintainer agreed that a list beats a
+  count, because `hmn ps --pid` and `hmn watch` can ask about one PID.
+- **Remedy wording fixed:** `N unreadable — re-run outside the sandbox`, mirroring Windows'
+  `N protected — re-run elevated for names`. The library docs lead with the count, since
+  inside an App Sandbox there is no 'outside' (the `gpu_process_listing` rustdoc is written with
+  item 4).
+- **`spilled: null` deferred to v0.3.0** under Principle 2. It is item 9, and the notice exists.
 - **Checked by hand, 2026-10-02:**
   - `sudo` under the report's profile is refused like uid 501 (exit `2`), so the macOS docs drop
     the `sudo` advice on measurement, not only on reasoning;
   - run from Terminal.app as responsible process, unsandboxed, `hmn ps` lists 26 processes,
     WindowServer included.
+- **The maintainer's three additions** landed in *Design decisions* (the `kinfo_proc` layout and
+  the architectures it was checked on), *PR split* (CI) and *When it bites* (Claude Code).
+
+Decided on 2026-10-03 while splitting the work into PRs; these are not from the reply:
+
+- **The macOS remedy ships with PR B**, not with the rest of item 6 in PR C. The remedy wording
+  and its `cfg!`-selected constant are a text change on lines part 1 already edits; without it,
+  macOS `hmn ps` would keep saying "re-run elevated" until PR C.
+- **`--exit-status` exits `2` on a partial device failure.** With `--exit-status`, nothing listed
+  and a tried device failed is "can't tell" (`2`), not "nothing matched" (`1`), because a skipped
+  device is not a negative answer. Without `--exit-status` nothing changes: exit `0` while some
+  device answered. It is the fourth deliberate behaviour change in *Why v0.2.14*.
+- **Every pushed commit passes the gate set.** A test-first red commit stays on the task branch
+  while the work is done and is folded into its green successor before a branch is pushed, so no
+  pushed commit is red. The set is *Verification*'s, extended with the MSRV check, CI's 1.88
+  clippy and test leg, and the two `ci.yml` feature-matrix checks.
 
 ---
 
