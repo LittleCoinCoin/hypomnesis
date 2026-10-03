@@ -53,7 +53,7 @@ OUTWARD ACTIONS: pushing a branch, opening a PR and posting a comment each need 
 ## Status
 ```mermaid
 graph TD
-    docs_pr[PR A: docs-only, report and amended plan]:::planned
+    docs_pr[PR A: docs-only, report and amended plan]:::done
     part1[PR B: part 1, cross-platform fixes and docs]:::planned
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
@@ -65,7 +65,7 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `docs_pr.md` | 📄 Leaf Task | ⬜ Planned |
+| `docs_pr.md` | 📄 Leaf Task | ✅ Done |
 | `part1/` | 📁 Directory | ⬜ Planned |
 
 ## Amendment Log
@@ -75,3 +75,4 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `docs_pr.md` | `field-check-v0213-macos` | fc0d647, 981df7b, c556751, aec53db (on 40a701e) | PR A = mi-for-the-rust-of-us/hypomnesis#6, opened 2026-10-03, 8/8 CI jobs pass; one force-with-lease push over c1810a5. Claude Code row measured in a fresh sandboxed session (CC 2.1.273: rc 71, `sandboxed: 1`, `SANDBOX_RUNTIME=1`): no `process-info` denial, hmn 0.2.13 correct, only `ps(1)` (setuid) refused — a case no scope item covers. Deviations: user decisions kept under their own lead-in in *Decisions taken*, U1–U3/R1-A1 labels kept out of R01; Step 2 committed after Step 4; `live.c` prints `proc_translated`. Two Sonnet verifiers: B-row remedy restored to the leaf's `N protected` wording, two Step 2 overclaims fixed. Open for the user: R01's "agent sandboxes that deny it to stop argv leaks" is unmeasured for any named harness (part1_close's territory). |
