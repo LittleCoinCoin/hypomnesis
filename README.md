@@ -198,8 +198,8 @@ hmn --json                   # same data as a JSON array
 hmn ps                       # all GPU processes — discovery command
 hmn ps --pid 12345           # filter to one PID (repeatable since v0.2.13: --pid A --pid B)
 hmn ps --filter canvas       # processes whose name contains "canvas", any case (v0.2.13)
-hmn ps --filter canvas --exit-status   # exit 1 if nothing listed: "is my job on the GPU?" (v0.2.13)
-hmn ps --device 0            # filter to one GPU on multi-GPU rigs (exit 2 if it can't be listed)
+hmn ps --filter canvas --exit-status   # exit 1 if nothing listed (2 if a device failed): "is my job on the GPU?" (v0.2.13)
+hmn ps --device 0            # filter to one GPU on multi-GPU rigs (exit 2 if it can't be listed; plain `hmn ps` exits 2 when every device failed)
 hmn ps --json                # scriptable output
 hmn ps --sort total           # order by dedicated + shared instead of dedicated alone
 hmn ps --min 50MiB            # hide rows below 50 MiB total footprint (since v0.2.11)
@@ -255,7 +255,7 @@ hmn: 0 GPU processes found matching pid=99 device=0.   # with filters
 hmn: 1 GPU process found matching filter="canvas" (14.2 GiB committed total); device 0 spilling: 154 MiB free, 2.1 GiB shared, 1 process paged.
 ```
 
-The stderr summary is always printed, even when the table is empty, so interactive users get an unambiguous "command worked, here's the count" line without breaking stdout's scriptability. Pipelines like `hmn ps | awk 'NR>1 {print $1}'` or `hmn ps --json | jq` work as expected. Redirect `2>/dev/null` to suppress the summary.
+The stderr summary is printed even when the table is empty (except when every device failed, which prints no table and exits `2`), so interactive users get an unambiguous "command worked, here's the count" line without breaking stdout's scriptability. Pipelines like `hmn ps | awk 'NR>1 {print $1}'` or `hmn ps --json | jq` work as expected. Redirect `2>/dev/null` to suppress the summary.
 
 `--sort <KEY>` (`dedicated` default, `shared`, or `total`) reorders both the text table and `--json` output — three different questions, not interchangeable: `dedicated` ("who do I kill to free VRAM?"), `shared` ("who is currently being paged out?" — a symptom, not a cause), `total` (dedicated + shared, "who is the biggest GPU-memory citizen overall?"). `dedicated` also accepts `vram` and `committed` as aliases — the words the rest of the tool's own vocabulary uses for the same quantity (the `ps` column header and `watch`'s `COMMITTED` column, respectively). Tie-breaks (name ascending, then PID ascending) are identical regardless of key. `shared`/`total` are a documented no-op ordering on Linux and macOS, where `shared_used_bytes` is always `0`.
 

@@ -208,7 +208,10 @@ enum Commands {
         /// Filter to a single GPU index. Default: every device reported
         /// by `device_count()`. An index that cannot be listed (out of
         /// range, or its query failing) is an error, exit `2`, rather than
-        /// an empty table that would read as an idle card.
+        /// an empty table that would read as an idle card. Without
+        /// `--device`, a device whose query fails is skipped with a stderr
+        /// line ending `(skipped)`; when every device failed, the exit is
+        /// `2` with no table.
         #[arg(long, value_name = "INDEX")]
         device: Option<u32>,
         /// Hide rows below this total footprint (`used_bytes +
@@ -260,7 +263,9 @@ enum Commands {
         /// answers "is my job on the GPU?" as a one-line gate. Off by
         /// default: without it, `hmn ps` exits `0` whether or not anything
         /// matched. A device named by `--device` that cannot be listed is
-        /// still exit `2`.
+        /// still exit `2`. A listing where every device failed is also `2`,
+        /// never `1`, and so is an empty listing that skipped a failed
+        /// device, since `1` means nothing matched on every device queried.
         #[arg(long)]
         exit_status: bool,
     },

@@ -391,14 +391,25 @@ const fn ps_exit_code(exit_status: bool, rows_empty: bool, failed: usize) -> u8 
 ///
 /// Returns the exit code, bypassing `main`'s `Ok`/`Err` fold like
 /// `run_fits` and `run_watch`: `0` normally; `1` under `exit_status`
-/// (`--exit-status`) when no process is listed, so `hmn ps --filter
-/// canvas --exit-status` is a one-line "is my job on the GPU?" gate, as
-/// `pgrep` is for processes; `2` when a device named by
-/// `--device` cannot be listed — out of range (`device index 3 out of
-/// range (have 1 devices)`, the library's own bounds check) or failing
-/// outright. Without `--device`, a device that fails is skipped so one
-/// broken device does not kill the whole listing; with it, the user asked
-/// for that device alone, and an empty table would read as an idle card.
+/// (`--exit-status`) when no process is listed and every device tried
+/// answered, so `hmn ps --filter canvas --exit-status` is a one-line "is
+/// my job on the GPU?" gate, as `pgrep` is for processes; `2` when a
+/// device named by `--device` cannot be listed — out of range (`device
+/// index 3 out of range (have 1 devices)`, the library's own bounds
+/// check) or failing outright. With `--device`, the user asked for that
+/// device alone, and an empty table would read as an idle card.
+///
+/// Without `--device`, a device that fails is skipped with a stderr line
+/// ending ` (skipped)` (`device_query_failure_line`), so one broken
+/// device does not kill the whole listing.
+/// When every device failed (at least one tried, none answering), `run_ps`
+/// prints `ALL_DEVICES_FAILED_LINE` and exits `2` with nothing on
+/// stdout: `--json` prints nothing on that exit, not `[]`, since a table
+/// or `[]` would read as "idle". Under `exit_status`, an empty listing
+/// that skipped a failed device exits `2`, not `1` (`ps_exit_code`):
+/// `1` means "queried, nothing matched", and the job may sit on the
+/// skipped device. With no device to try at all (`device_count()`
+/// failed), nothing was skipped, and the listing exits as before.
 pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool) -> ExitCode {
     // device_count returning Err here means no enumeration backend is
     // enabled / every backend failed; treat as zero NVIDIA devices and

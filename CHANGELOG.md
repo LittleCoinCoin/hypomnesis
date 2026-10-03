@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nvidia-smi`; on Windows and Linux it is unchanged. From the
   [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md), F2.
 
+- **`hmn ps` states each device it skipped, and exits `2` when every device failed**
+  (`src/bin/hmn/ps.rs`, `main.rs`) — without `--device`, a device whose query fails now prints
+  `hmn: ps failed to query device N: … (skipped)`, and when every device it tried failed,
+  `hmn ps` prints `hmn: ps: no device could be queried, so nothing could be listed` and exits
+  `2` with no table, where it printed an empty table and exited `0` on every platform (the
+  silent wrong answer `0 GPU processes found.`). `--json` prints nothing on that exit, not `[]`.
+  With `--exit-status`, an empty listing that skipped a failed device exits `2`, not `1`: `1`
+  means nothing matched on every device queried, and the job may sit on the skipped device. A
+  host with no device to try is unchanged.
+
 ## [0.2.13] - 2026-09-30
 
 Answers an askesis dogfooding report
