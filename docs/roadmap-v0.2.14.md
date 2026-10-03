@@ -89,7 +89,10 @@ Checking the report against the code and the kernel confirmed it, and went furth
 **When it bites.** Every earlier macOS test and benchmark ran in an unsandboxed shell, where nothing
 is refused. A `(deny default)` profile does not refuse `process-info` either. Under OpenAI Codex's
 Seatbelt policy, which allows `process-info*` only for `same-sandbox` targets, `hmn ps` lists all
-20 processes correctly; Chromium's `common.sb` keeps a TODO to deny it explicitly. It takes an
+20 processes correctly; Chromium's `common.sb` keeps a TODO to deny it explicitly. Claude Code's
+own Bash sandbox (2.1.273, measured 2026-10-03) refuses none of the calls `hmn` makes, and `hmn`
+0.2.13 lists the GPU processes there with their bytes; `ps(1)`, a setuid binary, could not run
+([evidence](../__reports__/field_check_v0213/evidence/claude_code_sandbox.md)). It takes an
 explicit `(deny process-info…)`, or the App Sandbox:
 
 | Caller | `proc_listpids` | others' `ledger` | `proc_pidpath` | `sysctl kern.proc` | `hmn` 0.2.13 |
@@ -100,7 +103,7 @@ explicit `(deny process-info…)`, or the App Sandbox:
 | explicit `deny process-info*` (the report's profile; agent sandboxes that deny it to stop argv leaks) | `EPERM` | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit `0` |
 | the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok for them | ok | `0 found`, exit `0`, though the job is readable |
 | `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" |
-| Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | not yet measured | not yet measured | not yet measured | not yet measured | not yet measured |
+| Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | ok | ok | ok | ok (1108 processes, `kernel_task` named) | correct |
 
 **Why Windows never showed it.** PDH on Windows, and NVML on Linux, return every process's VRAM
 from one system-wide query, with no permission check per process. Only names can be refused there,
