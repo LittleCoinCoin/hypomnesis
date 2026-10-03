@@ -233,7 +233,9 @@ that reads each PID separately, so it is the one where some rows can go missing.
   - display width for CJK and emoji names: column widths are bytes and padding is chars, which
     holds wherever one char is one column, and the fix needs East Asian Width data.
 
-  Both go to `ROADMAP.md`.
+  In `ROADMAP.md`, the display-width item extends the existing *Text-table widths in characters,
+  not bytes* entry under *Speculative: v0.3.0*, and the IORegistry item is a *Carried forward*
+  row.
 
 ---
 
@@ -249,7 +251,7 @@ that reads each PID separately, so it is the one where some rows can go missing.
 | 6 | `unreadable` counts, `--exit-status` `2`, `watch` notices (request 1); the platform remedy ships in PR B | feature | ⬜ |
 | 7 | `n/a` vs `?` in SPILL and `PAGED` cells (request 4, cells) | fix | ⬜ |
 | 8 | The macOS limitation restated from evidence, one canonical statement (request 2) | docs | ⬜ |
-| 9 | `spilled: null` notice and `ROADMAP.md` v0.3.0 entries (request 4, JSON) | docs | ✅ notice written |
+| 9 | `spilled: null` notice and `ROADMAP.md` v0.3.0 entries (request 4, JSON) | docs | ✅ |
 | 10 | Correct the field report's F5 mechanism and site list, before the issue comment | docs | ✅ |
 | 11 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ⬜ |
 
@@ -373,6 +375,8 @@ Decided on 2026-10-03 while splitting the work into PRs; these are not from the 
   flipped, per the dogfooding style guide.
 - The README's "what's new" banner rotated: 🆕 `0.2.14`, `0.2.13` to 🚀, `0.2.11` dropped.
 - `__reports__/` dropped from the tree before the merge, as in `f3c6010`; it stays in history.
+  Each link into it from `docs/` and `ROADMAP.md` becomes a plain mention of the file name and
+  the SHA of the commit that last held it, so no link is left pointing at a deleted file.
 
 ---
 
