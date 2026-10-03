@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means nothing matched on every device queried, and the job may sit on the skipped device. A
   host with no device to try is unchanged.
 
+- **`process_exists(0)` on macOS answers `Some(true)`** (`src/gpu/metal.rs`, `src/gpu/kinfo.rs`,
+  new) — `kernel_task` has no executable path, so `proc_pidpath` says `ESRCH` and PID 0 read as
+  absent; `hmn watch 0` warned `names no running process`. When libproc gives no path,
+  `process_exists` now asks `sysctl` `KERN_PROC_PID`, which finds it, so `hmn watch 0` no longer
+  warns. A caller whose sandbox refuses libproc but allows `kern.proc` now gets `Some(true)` or
+  `Some(false)` where it got `None`; with both refused the answer is `None` unless `proc_pidpath`
+  said `ESRCH`. The record is read by a private `kinfo_proc` parser with no `unsafe`; its 648-byte
+  layout (`p_pid` at 40, `p_comm` at 243) was verified on arm64 natively (Apple M3 Pro) and on
+  `x86_64` under Rosetta 2, by the SDK header and a live read of the test process; native Intel
+  hardware is untested. A zombie, exited but not yet reaped, now reads `Some(true)` (it read
+  `Some(false)`), as on Linux. Issue #3, item 2 of
+  [`docs/roadmap-v0.2.14.md`](docs/roadmap-v0.2.14.md).
+
 ## [0.2.13] - 2026-09-30
 
 Answers an askesis dogfooding report

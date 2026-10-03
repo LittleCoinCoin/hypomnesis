@@ -475,12 +475,19 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// |---|---|---|
 /// | Linux | `/proc/<pid>/status`, whose `Tgid` must equal `pid` (so a thread ID is not taken for a process) | the file exists but cannot be read |
 /// | Windows (`pdh` feature) | a `Toolhelp32` process snapshot, the mechanism `gpu_processes` uses to name processes `OpenProcess` cannot (a process whose snapshot name is empty — none is known — would read as absent) | the snapshot cannot be taken |
-/// | macOS (`metal` feature) | `proc_pidpath`; `ESRCH` means no such process | `proc_pidpath` fails for another reason (e.g. `EPERM`), or `pid` exceeds `i32::MAX` |
+/// | macOS (`metal` feature) | `proc_pidpath`, then `sysctl` `KERN_PROC_PID` when libproc gives no path (`kernel_task` has none, and a sandbox can refuse libproc and still allow `sysctl`) | both are refused and `proc_pidpath` did not say `ESRCH`, or `pid` exceeds `i32::MAX` |
 /// | anything else | — | always |
 ///
 /// On Linux a process hidden from the caller (a `/proc` mounted with
 /// `hidepid`) reads as `Some(false)`, indistinguishable from one that does
 /// not exist.
+///
+/// On macOS PID 0 (`kernel_task`) reads `Some(true)`: it has no executable
+/// path, so `proc_pidpath` says `ESRCH`, and `KERN_PROC_PID` finds it (since
+/// v0.2.14). When libproc and `kern.proc` are both refused, the answer is
+/// `None` unless `proc_pidpath` said `ESRCH`, which reads `Some(false)`.
+/// A zombie (exited, not yet reaped) reads `Some(true)` on macOS as on
+/// Linux: the kernel keeps its record until the parent reaps it.
 ///
 /// Added in v0.2.13 for `hmn watch`, which warns when a PID given on its
 /// command line names no process, rather than watching it silently as

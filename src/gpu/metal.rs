@@ -726,10 +726,14 @@ pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::Gpu
     Some(out)
 }
 
-/// Whether `pid` names a running process, via `proc_pidpath`: a path
-/// means yes, `ESRCH` means no, anything else (e.g. `EPERM`) is `None`,
-/// "can't tell". `None` too for a `pid` past `i32::MAX`, which no macOS
-/// PID reaches. Backs [`crate::gpu::process_exists`] on macOS.
+/// Whether `pid` names a running process: `proc_pidpath` first (a path
+/// means yes), then, when it gives no path, `sysctl` `KERN_PROC_PID`
+/// (one record means yes, none means no). When `sysctl` is refused too,
+/// `proc_pidpath`'s `ESRCH` means no and anything else (e.g. `EPERM`) is
+/// `None`, "can't tell"; an unusable record is `None` as well. The rule
+/// is [`super::kinfo::decide_exists`]. `None` too for a `pid` past
+/// `i32::MAX`, which no macOS PID reaches. Backs
+/// [`crate::gpu::process_exists`] on macOS.
 pub(super) fn process_exists(pid: u32) -> Option<bool> {
     let pid = i32::try_from(pid).ok()?;
     decide_exists(proc_pidpath_lookup(pid), || kern_proc_pid_lookup(pid))
