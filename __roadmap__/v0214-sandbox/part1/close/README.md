@@ -19,7 +19,7 @@ The hardware checks need the user's machine and, for the Claude Code sandbox row
 ## Status
 ```mermaid
 graph TD
-    part1_close[Item 8 docs and part 1 field check]:::planned
+    part1_close[Item 8 docs and part 1 field check]:::inprogress
     part2[PR C: part 2, measuring inside a sandbox]:::planned
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
@@ -31,7 +31,7 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `part1_close.md` | 📄 Leaf Task | ⬜ Planned |
+| `part1_close.md` | 📄 Leaf Task | 🔄 In Progress |
 | `part2/` | 📁 Directory | ⬜ Planned |
 
 ## Amendment Log
