@@ -337,6 +337,53 @@ pub fn matches_any(name: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| name.contains(&p.to_lowercase()))
 }
 
+/// Whether `hmn ps` failed outright: at least one device was tried and
+/// none of them answered. `tried == 0` (no device to try, because
+/// `device_count()` failed) is not a failure, and one failed device
+/// among several that answered is a skip, not a failure.
+#[must_use]
+const fn every_device_failed(tried: usize, failed: usize) -> bool {
+    tried > 0 && failed >= tried
+}
+
+/// The stderr line for a device whose query failed:
+/// `hmn: ps failed to query device <index>: <err>`, with ` (skipped)`
+/// appended when `skipped` (no `--device`, so the listing carries on
+/// without it). Both forms share one prefix; the suffix alone tells a
+/// skipped device from a fatal `--device` failure.
+#[must_use]
+pub fn device_query_failure_line(
+    index: u32,
+    err: &impl std::fmt::Display,
+    skipped: bool,
+) -> String {
+    if skipped {
+        format!("hmn: ps failed to query device {index}: {err} (skipped)")
+    } else {
+        format!("hmn: ps failed to query device {index}: {err}")
+    }
+}
+
+/// The closing stderr line when every device `hmn ps` tried failed, so
+/// its exit `2` always has a stated reason.
+const ALL_DEVICES_FAILED_LINE: &str =
+    "hmn: ps: no device could be queried, so nothing could be listed";
+
+/// The exit code of a listing that reached the end of `run_ps`: `0`
+/// without `exit_status` or when rows are listed; with it and nothing
+/// listed, `1` when every tried device answered, `2` when one of them
+/// (`failed > 0`) did not — the process may sit on the skipped device.
+#[must_use]
+const fn ps_exit_code(exit_status: bool, rows_empty: bool, failed: usize) -> u8 {
+    if !exit_status || !rows_empty {
+        0
+    } else if failed > 0 {
+        2
+    } else {
+        1
+    }
+}
+
 /// Run the `ps` subcommand: collect process rows for the selected
 /// device(s) — sampling one live adapter-wide spill check per device
 /// along the way (see [`snapshot_is_spilling`]) — apply `filters`, sort
@@ -366,6 +413,10 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     // Processes `--filter` could not judge (no resolvable name), and the
     // spilling devices — what the summary line reports beyond the rows.
     let mut notes = SummaryNotes::default();
+    // Devices whose query was attempted, and the ones that failed: every
+    // tried device failing is an exit `2`, not an empty listing.
+    let mut tried: usize = 0;
+    let mut failed: usize = 0;
     for &idx in &device_indices {
         // Look up the device once: its name for the DEVICE column, its
         // free VRAM for a spilling device's summary clause. Failure here
@@ -396,13 +447,18 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         // gpu_processes()'s own call duration, the same call-ordering
         // discipline `hmn watch`'s wall_clock/t_ms pairing uses.
         let spilling = snapshot_is_spilling(idx);
+        tried += 1;
         let entries = match gpu_processes(idx) {
             Ok(entries) => entries,
             Err(e) if filters.device.is_some() => {
-                eprintln!("hmn: ps failed to query device {idx}: {e}");
+                eprintln!("{}", device_query_failure_line(idx, &e, false));
                 return ExitCode::from(2);
             }
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("{}", device_query_failure_line(idx, &e, true));
+                failed += 1;
+                continue;
+            }
         };
         // Over every process on the device, before any filter: a row's
         // share of the device's shared bytes, and the device's summary
@@ -448,6 +504,14 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         }
     }
 
+    // Nothing on stdout, as on the `--device` failure path: a table or
+    // `[]` after "no device could be queried" reads as "idle" to a script
+    // that checks stdout alone.
+    if every_device_failed(tried, failed) {
+        eprintln!("{ALL_DEVICES_FAILED_LINE}");
+        return ExitCode::from(2);
+    }
+
     // Human-facing display order, per `--sort` (default: VRAM descending
     // so the biggest consumers land at the top — the row a user asking
     // "what's eating my GPU memory?" wants to see first). Tie-breaks
@@ -466,15 +530,11 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     // Human-readable summary on stderr — preserves stdout's scriptability
     // (header-only table or `[]` for empty) while giving interactive
     // users an unambiguous "command worked, here's the count" line.
-    // Always printed, even when rows is non-empty, so the message is a
-    // consistent confirmation rather than an error indicator. Redirect
-    // 2>/dev/null to suppress.
+    // Printed for every listing that reaches here, even when rows is
+    // non-empty, so the message is a consistent confirmation rather than
+    // an error indicator. Redirect 2>/dev/null to suppress.
     eprintln!("hmn: {}", format_ps_summary(&rows, filters, &notes));
-    if exit_status && rows.is_empty() {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::from(ps_exit_code(exit_status, rows.is_empty(), failed))
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
@@ -807,6 +867,61 @@ mod tests {
         assert!(matches_any("figure13_newline_patch.exe", &pats));
         assert!(matches_any("PYTHON.EXE", &pats));
         assert!(!matches_any("dwm.exe", &pats));
+    }
+
+    // --- failed and skipped devices ---
+
+    #[test]
+    fn every_device_failed_needs_a_device_tried_and_none_answering() {
+        for ((tried, failed), want) in [
+            ((0, 0), false),
+            ((1, 0), false),
+            ((1, 1), true),
+            ((2, 1), false),
+            ((2, 2), true),
+        ] {
+            assert_eq!(
+                every_device_failed(tried, failed),
+                want,
+                "(tried, failed) = ({tried}, {failed})"
+            );
+        }
+    }
+
+    #[test]
+    fn device_query_failure_line_for_a_named_device_is_unchanged() {
+        assert_eq!(
+            device_query_failure_line(3, &"boom", false),
+            "hmn: ps failed to query device 3: boom"
+        );
+    }
+
+    #[test]
+    fn device_query_failure_line_for_a_skipped_device_ends_with_skipped() {
+        assert_eq!(
+            device_query_failure_line(3, &"boom", true),
+            "hmn: ps failed to query device 3: boom (skipped)"
+        );
+    }
+
+    #[test]
+    fn ps_exit_code_table_pins_the_exit_status_rule() {
+        for ((exit_status, rows_empty, failed), want) in [
+            ((false, false, 0), 0),
+            ((false, true, 0), 0),
+            ((false, true, 1), 0),
+            ((true, false, 0), 0),
+            ((true, false, 1), 0),
+            ((true, true, 0), 1),
+            ((true, true, 1), 2),
+            ((true, true, 2), 2),
+        ] {
+            assert_eq!(
+                ps_exit_code(exit_status, rows_empty, failed),
+                want,
+                "(exit_status, rows_empty, failed) = ({exit_status}, {rows_empty}, {failed})"
+            );
+        }
     }
 
     // --- resolved_name (PID-reuse comparison filter) ---
