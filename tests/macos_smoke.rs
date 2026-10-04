@@ -12,7 +12,8 @@
 //! `missing_docs` lint would otherwise fire on non-macOS builds where
 //! the crate appears empty).
 //!
-//! Tests 1, 2, 5, 6 run unconditionally on any macOS host. Tests 3 and 4
+//! Tests 1, 2, 5, 6 and 7 run unconditionally on any macOS host (test 7
+//! prints a skip line where `device_count` is not 1). Tests 3 and 4
 //! are `#[ignore]`-gated because they require Apple Silicon hardware
 //! with a real Metal device — they would fail on Intel Macs (where the
 //! Metal backend returns `None` and the dispatcher falls through to
@@ -160,4 +161,30 @@ fn snapshot_now_includes_gpu_on_macos() {
         snap.gpu.is_some(),
         "expected snap.gpu to be Some on macOS (Metal backend should populate it)"
     );
+}
+
+#[test]
+fn device_index_past_count_is_out_of_range_on_apple_silicon() {
+    // Apple Silicon reports one Metal device, so index 1 is past the end.
+    // An Intel Mac (or any host without a count source) skips. The count
+    // comes from `sysctl machdep.cpu.brand_string`, which a sandbox that
+    // denies `process-info*` still allows, so this runs sandboxed too.
+    let count = hypomnesis::device_count();
+    let Ok(1) = count else {
+        eprintln!("device_count() is {count:?} on this host, not Ok(1): skipping");
+        return;
+    };
+    for (name, error) in [
+        ("device_info", hypomnesis::device_info(1).err()),
+        ("process_gpu_info", hypomnesis::process_gpu_info(1).err()),
+        ("gpu_processes", hypomnesis::gpu_processes(1).err()),
+    ] {
+        assert!(
+            matches!(
+                error,
+                Some(HypomnesisError::DeviceIndexOutOfRange { index: 1, count: 1 })
+            ),
+            "expected DeviceIndexOutOfRange {{ index: 1, count: 1 }} from {name}(1), got {error:?}"
+        );
+    }
 }

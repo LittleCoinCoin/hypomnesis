@@ -96,7 +96,7 @@ pub fn device_count() -> Result<u32> {
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `index` is past
-/// the device count reported by `NVML` or `DXGI`.
+/// the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if no backend can satisfy
 /// the query.
 #[allow(unused_variables)] // `index` unused when no GPU backend feature is enabled
@@ -200,7 +200,7 @@ pub fn device_info(index: u32) -> Result<GpuDeviceInfo> {
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`
-/// is past the device count reported by `NVML` or `DXGI`.
+/// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend fails.
 #[allow(unused_variables)] // `device_index` unused when no GPU backend feature is enabled
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled (body collapses)
@@ -366,7 +366,7 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`
-/// is past the device count reported by `NVML` or `DXGI`.
+/// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend
 /// fails (or no backend is enabled by features).
 #[allow(unused_variables)] // `device_index` unused when no GPU backend feature is enabled
@@ -590,9 +590,11 @@ fn resolve_unresolved_windows_names(entries: &mut [GpuProcessEntry]) {
 
 /// Bounds-check `index` against whatever count source is available.
 ///
-/// Tries `NVML` first; on Windows, falls back to `DXGI` if `NVML` is
-/// unavailable. Returns `Ok(())` when no count source is available
-/// (caller will surface its own error, typically `NoGpuSource`).
+/// On macOS, tries `Metal` first (the same order as [`device_count`],
+/// so the bound reported matches the count `hmn` shows). Then tries
+/// `NVML`; on Windows, falls back to `DXGI` if `NVML` is unavailable.
+/// Returns `Ok(())` when no count source is available (caller will
+/// surface its own error, typically `NoGpuSource`).
 ///
 /// # Errors
 ///
@@ -600,8 +602,17 @@ fn resolve_unresolved_windows_names(entries: &mut [GpuProcessEntry]) {
 /// source reports a count and `index >= count`.
 #[allow(unused_variables)] // unused when no backend feature is enabled
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
-#[allow(clippy::unnecessary_wraps)] // Result is necessary only when nvml or dxgi feature returns Err
+#[allow(clippy::unnecessary_wraps)] // Result is necessary only when metal, nvml or dxgi feature returns Err
 fn bounds_check(index: u32) -> Result<()> {
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    if let Some(count) = metal::device_count() {
+        return if index >= count {
+            Err(HypomnesisError::DeviceIndexOutOfRange { index, count })
+        } else {
+            Ok(())
+        };
+    }
+
     #[cfg(feature = "nvml")]
     if let Some(count) = nvml::device_count() {
         return if index >= count {
@@ -655,5 +666,25 @@ mod tests {
         assert_ne!(process_exists(impossible), Some(true));
         #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
         assert_eq!(process_exists(impossible), Some(false));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn bounds_check_metal_arm_admits_index_0_and_rejects_index_1() {
+        // Apple Silicon reports one Metal device; an Intel Mac (no count)
+        // skips. Unsandboxed, the dispatchers answer index 0 from Metal
+        // before `bounds_check` runs, so only this test sees its Metal arm.
+        let Some(1) = metal::device_count() else {
+            return;
+        };
+        assert!(bounds_check(0).is_ok(), "{:?}", bounds_check(0));
+        assert!(
+            matches!(
+                bounds_check(1),
+                Err(HypomnesisError::DeviceIndexOutOfRange { index: 1, count: 1 })
+            ),
+            "{:?}",
+            bounds_check(1)
+        );
     }
 }

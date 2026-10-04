@@ -152,8 +152,9 @@ fn gpu_process_entry_shared_bytes_zero_off_windows() {
 #[test]
 fn gpu_processes_returns_result_or_no_gpu_source() {
     // On a runner without NVIDIA / nvidia-smi, gpu_processes(0) typically
-    // returns Err(NoGpuSource) (or DeviceIndexOutOfRange when bounds_check
-    // catches a count source). Either is acceptable. On a host with
+    // returns Err(NoGpuSource) (or, on Linux and Windows,
+    // DeviceIndexOutOfRange when bounds_check catches a count source; on
+    // macOS only NoGpuSource is accepted). On a host with
     // NVIDIA, returns Ok(Vec) — possibly empty on Linux (NVML compute-only,
     // no CUDA process active) or essentially never empty on Windows (PDH
     // surfaces every GPU memory holder, compositor included). We assert
@@ -186,7 +187,18 @@ fn gpu_processes_returns_result_or_no_gpu_source() {
             }
         }
         Err(e) => {
-            // Expected on hosted runners with no NVIDIA hardware.
+            // Expected on hosted runners with no NVIDIA hardware. On macOS
+            // the Metal count is 1, so index 0 is never out of range. This
+            // arm runs there only when Metal cannot answer index 0 (inside a
+            // sandbox), so it catches an off-by-one in bounds_check's Metal
+            // arm only in a sandboxed run; the unsandboxed guard is the unit
+            // test `bounds_check_metal_arm_admits_index_0_and_rejects_index_1`.
+            #[cfg(target_os = "macos")]
+            assert!(
+                matches!(e, HypomnesisError::NoGpuSource),
+                "unexpected error from gpu_processes(0): {e:?}"
+            );
+            #[cfg(not(target_os = "macos"))]
             assert!(
                 matches!(
                     e,

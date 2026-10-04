@@ -5,7 +5,7 @@
 /// Errors that can occur during a `hypomnesis` measurement.
 ///
 /// `#[non_exhaustive]`: new variants will be added as new backends are introduced
-/// (e.g., AMD `ROCm` SMI, Apple Metal). Patch-release-safe.
+/// (e.g., AMD `ROCm` SMI). Patch-release-safe.
 ///
 /// # `Display` vs structured fields
 ///
@@ -73,9 +73,20 @@ pub enum HypomnesisError {
     /// No GPU measurement source was usable.
     ///
     /// Returned when `NVML`, `DXGI`, `PDH`, and `nvidia-smi` all failed
-    /// (or were disabled by feature flags) for a single query.
-    #[error(
-        "no GPU measurement source available (NVML, DXGI, PDH, and nvidia-smi all failed or are disabled)"
+    /// (or were disabled by feature flags) for a single query. On macOS,
+    /// `Metal` replaces `DXGI` and `PDH`, and the message names `Metal`,
+    /// `NVML`, and `nvidia-smi`.
+    #[cfg_attr(
+        target_os = "macos",
+        error(
+            "no GPU measurement source available (Metal, NVML, and nvidia-smi all failed or are disabled)"
+        )
+    )]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        error(
+            "no GPU measurement source available (NVML, DXGI, PDH, and nvidia-smi all failed or are disabled)"
+        )
     )]
     NoGpuSource,
 
@@ -94,3 +105,25 @@ pub enum HypomnesisError {
 
 /// Result alias for `hypomnesis` operations.
 pub type Result<T> = std::result::Result<T, HypomnesisError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_gpu_source_display_names_the_backends_of_the_platform() {
+        let text = HypomnesisError::NoGpuSource.to_string();
+        // Windows and Linux keep the v0.2.13 text byte for byte.
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            text,
+            "no GPU measurement source available (NVML, DXGI, PDH, and nvidia-smi all failed or are disabled)"
+        );
+        // macOS names Metal and none of the Windows-only backends.
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            text,
+            "no GPU measurement source available (Metal, NVML, and nvidia-smi all failed or are disabled)"
+        );
+    }
+}

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hmn ps --device 1` on an Apple Silicon Mac says the index is out of range**
+  (`src/gpu/mod.rs`, `src/error.rs`) — it now prints `device index 1 out of range (have 1 devices)`,
+  where it printed the `NoGpuSource` text naming four backends macOS lacks: `bounds_check` had no
+  Metal arm, so `device_info`, `process_gpu_info` and `gpu_processes` fell through to
+  `NoGpuSource`. The answer also holds in a sandbox that denies `process-info*`, since the Metal
+  count comes from `sysctl`. On macOS the `NoGpuSource` text now names Metal, NVML and
+  `nvidia-smi`; on Windows and Linux it is unchanged. From the
+  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md), F2.
+
 ## [0.2.13] - 2026-09-30
 
 Answers an askesis dogfooding report
