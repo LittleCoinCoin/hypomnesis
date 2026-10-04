@@ -379,8 +379,9 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
 pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
     // Metal is the macOS primary source: per-PID ledger reads of
-    // `graphics_footprint` over `proc_listpids`. Same-user PIDs only;
-    // cross-user PIDs surface as EPERM and are silently skipped.
+    // `graphics_footprint` over `proc_listpids`: every process the
+    // caller's sandbox lets it read; a refused `proc_listpids` falls
+    // through to `NoGpuSource`.
     #[cfg(all(target_os = "macos", feature = "metal"))]
     if let Some(mut rows) = metal::list_compute_processes(device_index) {
         sort_by_pid(&mut rows);

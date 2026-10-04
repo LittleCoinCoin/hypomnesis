@@ -14,8 +14,8 @@
 //!   visible devices. On Linux (`NVML`) the list is compute-only; on
 //!   Windows (`PDH`, `WDDM 2.0`+) the list includes every GPU memory
 //!   holder (compositor, browsers, games, compute); on macOS (Metal
-//!   ledger) the list enumerates every same-user PID holding
-//!   `graphics_footprint` bytes. See the `--help` Limitations text and
+//!   ledger) the list enumerates every process holding
+//!   `graphics_footprint` bytes the sandbox lets it read. See the `--help` Limitations text and
 //!   the rustdoc for [`hypomnesis::gpu_processes`] for the
 //!   per-platform breakdown.
 //! - `hmn spill -- <command>` — run a command while polling
@@ -146,16 +146,18 @@ mod watch;
                   sample and the name lookup — elevation would not help) or `[protected]` \
                   (the snapshot fallback itself could not be taken — very rare; re-run \
                   elevated). The Windows kernel itself (PID 4) renders as `[kernel]`, not \
-                  `?` or `[protected]`. This distinction is Windows-only; Linux/macOS \
-                  unresolved rows remain a bare `?`/absent name — run as the owning user \
-                  or with `sudo` there.\n\
-                  - Security note: a `[protected]` row (or a bare `?` on Linux/macOS) that \
+                  `?` or `[protected]`. This distinction is Windows-only; Linux and macOS \
+                  unresolved rows remain a bare `?`/absent name. On Linux, run as the \
+                  owning user or with `sudo` to resolve one.\n\
+                  - Security note: a `[protected]` row (or, on Linux, a bare `?`) that \
                   does not resolve under elevation is worth investigating — by construction \
                   it is either a process owned by another user, a process running as \
                   SYSTEM/LOCAL SERVICE/NETWORK SERVICE, a PPL-protected process, or (rarely) \
                   the snapshot API itself failing. None of these are intrinsically \
                   malicious, but on a single-user desktop an unexpected one holding \
-                  substantial VRAM is worth investigating. The summary line's protected-count \
+                  substantial VRAM is worth investigating. On macOS a bare `?` means a sandbox \
+                  withheld the name, and elevation does not change that; see README \
+                  Limitations, item 9. The summary line's protected-count \
                   parenthetical counts `[protected]`/absent-name/the rare nvidia-smi-fallback \
                   literal `?` — not `[exited]`, since elevation can't help a process that's \
                   already gone. On macOS the same clause reads \
@@ -171,9 +173,9 @@ mod watch;
                   (`graphics_footprint` ledger entry); the kernel evicts idle Metal pages, \
                   so the same PID may report different values across calls. Same \
                   resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS`.\n\
-                  - macOS: cross-user PIDs are silently skipped — the per-PID `ledger` \
-                  syscall returns `EPERM` for processes owned by another user. To list \
-                  every PID on the system, run elevated (`sudo hmn ps`)."
+                  - macOS: the sandbox, not file ownership, decides what `hmn` can read — \
+                  unsandboxed, every user's processes are listed and elevation does not \
+                  help; see README Limitations, item 9."
 )]
 struct Cli {
     /// Subcommand. Omitted for the default device-summary view.
@@ -197,8 +199,9 @@ enum Commands {
     /// List processes holding GPU memory. On Linux: compute-only via
     /// NVML. On Windows / WDDM 2.0+: every GPU memory holder via PDH
     /// (compositor, browsers, compute, etc.). On macOS: every
-    /// same-user PID holding `graphics_footprint` ledger bytes; run
-    /// elevated (`sudo`) to include cross-user PIDs. See `hmn --help`
+    /// process holding `graphics_footprint` ledger bytes that the
+    /// sandbox lets it read (the sandbox, not file ownership, decides;
+    /// see README Limitations, item 9). See `hmn --help`
     /// Limitations for the full per-platform breakdown.
     Ps {
         /// Keep only this PID. Repeatable (`--pid A --pid B`): a process

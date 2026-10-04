@@ -583,9 +583,9 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///   `; M protected — re-run outside the sandbox` on macOS, where
 ///   `outside_sandbox == true`) joined by `; `. A row
 ///   counts as protected when `name.is_none()` (`NVML`'s
-///   `/proc/<pid>/comm` unreadable on Linux; macOS cross-user PIDs whose
-///   `ledger` syscall returned `EPERM` — `sudo hmn ps` is the equivalent
-///   elevation there); when `name` is exactly `Some("[protected]")` (the
+///   `/proc/<pid>/comm` unreadable on Linux; on macOS when the sandbox
+///   withheld `proc_pidpath` — see README Limitations, item 9);
+///   when `name` is exactly `Some("[protected]")` (the
 ///   Windows-only bracket meaning the `Toolhelp32Snapshot` fallback could
 ///   not be taken at all — see `hypomnesis::gpu_processes`'s Windows
 ///   path); or when `name` is the literal `Some("?")` string the
@@ -603,13 +603,6 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///   genuinely foreign-user / `SYSTEM` / `PPL`-protected processes, or —
 ///   on Linux/macOS, where the fallback doesn't apply — any unresolved
 ///   row at all.
-///
-///   Known residual: a process that exits between enumeration and its
-///   name lookup also has `name == None`, so it counts as protected, and
-///   on macOS the `re-run outside the sandbox` advice can fire for a
-///   process that is merely gone. v0.2.13's `re-run elevated` had the
-///   same race, so it is not new, and this function's `protected`
-///   counting is deliberately unchanged here.
 ///
 ///   Under `--filter`, a third continuation, `; K unnamed not matched`,
 ///   counts the processes that passed `--pid` / `--min` but have no name

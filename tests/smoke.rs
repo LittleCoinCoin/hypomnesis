@@ -172,7 +172,7 @@ fn gpu_processes_returns_result_or_no_gpu_source() {
                 // DXGI cannot enumerate other PIDs; NVML / nvidia-smi
                 // enumerate NVIDIA processes; PDH enumerates Windows
                 // VidMm-tracked GPU memory holders; Metal enumerates
-                // same-user PIDs via the macOS kernel ledger.
+                // PIDs via the macOS kernel ledger.
                 assert!(
                     matches!(
                         row.source,

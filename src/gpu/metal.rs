@@ -2,13 +2,15 @@
 
 //! macOS GPU backend — per-process Metal memory on Apple Silicon UMA.
 //!
-//! Reads `graphics_footprint` from the BSD kernel ledger for any
-//! same-user PID via `ledger(LEDGER_ENTRY_INFO_V2, pid, …)`. On a
+//! Reads `graphics_footprint` from the BSD kernel ledger for any PID
+//! the caller's sandbox lets it read, via
+//! `ledger(LEDGER_ENTRY_INFO_V2, pid, …)`. On a
 //! unified-memory-architecture (`UMA`) Apple Silicon `SoC` the GPU and
 //! CPU share the same physical pages, so device-wide `total_bytes` is
 //! `sysctl hw.memsize` and the adapter name is the CPU brand string
-//! (`machdep.cpu.brand_string`). Cross-user PIDs require root; their
-//! ledger reads return `EPERM` and are skipped silently in enumeration.
+//! (`machdep.cpu.brand_string`). File ownership plays no part: a ledger
+//! read refused by the caller's sandbox is skipped silently in
+//! enumeration (see README Limitations, item 9).
 //!
 //! Source map: `ledger` (per-process graphics resident bytes),
 //! `sysctlbyname` (device totals, name), `proc_listpids` +
@@ -72,7 +74,7 @@ mod libsystem_ffi {
         /// arg1 is the target PID reinterpreted as a pointer-sized
         /// integer (kernel convention — see `osfmk/kern/ledger.c`).
         /// Returns `0` on success, `-1` with `errno` set on failure
-        /// (e.g. `EPERM` for cross-user reads).
+        /// (e.g. `EPERM` for a read refused by the caller's sandbox).
         pub(super) unsafe fn ledger(
             cmd: i32,
             arg1: *mut c_void,
@@ -128,8 +130,8 @@ mod libsystem_ffi {
         ///
         /// See: `<libproc.h>`. Writes a NUL-terminated path into
         /// `buffer`. Returns the path length on success (excluding
-        /// NUL), or `0` on failure (e.g. process exited, permission
-        /// denied for cross-user PIDs).
+        /// NUL), or `0` on failure (e.g. process exited, or the call
+        /// refused by the caller's sandbox).
         pub(super) unsafe fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
     }
 }
@@ -470,8 +472,9 @@ fn resolve_graphics_footprint_index() -> Option<i32> {
 ///
 /// Calls `ledger(LEDGER_ENTRY_INFO_V2, pid, buf, &count)` and reads the
 /// `lei_balance` of the resolved entry index. Returns `None` if the
-/// syscall fails (e.g. cross-user PID without root → `EPERM`, or PID
-/// has exited → `ESRCH`), or the index has not yet been resolvable.
+/// syscall fails (e.g. a read refused by the caller's sandbox →
+/// `EPERM`, or PID has exited → `ESRCH`), or the index has not yet been
+/// resolvable.
 ///
 /// `graphics_footprint` tracks resident Metal-written pages on Apple
 /// Silicon UMA: writing every byte of a 256 MiB `MTLBuffer` increases
@@ -511,8 +514,8 @@ fn read_graphics_footprint(pid: i32) -> Option<u64> {
     #[allow(clippy::as_conversions, clippy::cast_sign_loss)]
     let pid_as_ptr = pid as usize as *mut c_void;
     // SAFETY: arg1 is the PID encoded as a pointer; arg2 is the
-    // entry-array buffer; arg3 is the count in/out. Cross-user PIDs
-    // surface as a non-zero return (errno = EPERM); PID-exited
+    // entry-array buffer; arg3 is the count in/out. A read refused by
+    // the caller's sandbox surfaces as a non-zero return; PID-exited
     // surfaces as ESRCH. Both are folded into `None` below.
     let rc = unsafe {
         libsystem_ffi::ledger(
@@ -626,10 +629,11 @@ pub(super) fn process_gpu_info(device_index: u32) -> Option<crate::ProcessGpuInf
     })
 }
 
-/// Enumerate every same-user process holding GPU memory on
-/// `device_index`. Cross-user PIDs (`EPERM` on the ledger read) are
-/// skipped silently, as are PIDs with a zero `graphics_footprint`
-/// balance (mirrors NVML's per-process filter on Linux).
+/// Enumerate every process holding GPU memory on `device_index` that
+/// the caller's sandbox lets it read. PIDs whose ledger read is refused
+/// by the caller's sandbox are skipped silently, as are PIDs with a
+/// zero `graphics_footprint` balance (mirrors NVML's per-process filter
+/// on Linux).
 ///
 /// Two-phase `proc_listpids`: query the buffer size first, then fill.
 /// PID count may grow between the two calls; the iteration is capped
@@ -699,8 +703,9 @@ pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::Gpu
             continue;
         }
         let Some(used) = read_graphics_footprint(pid) else {
-            // Cross-user EPERM, ESRCH (exited), or absent index —
-            // all surface as `None` here and are silently skipped.
+            // A read refused by the caller's sandbox, ESRCH (exited),
+            // or absent index — all surface as `None` here and are
+            // silently skipped.
             continue;
         };
         if used == 0 {
@@ -805,9 +810,9 @@ fn kern_proc_pid_lookup(pid: i32) -> PidLookup {
 
 /// Resolve `pid`'s executable basename via `proc_pidpath`.
 ///
-/// Returns `None` on syscall failure (process exited, cross-user
-/// permission denial, or path-decoding failure). The basename is the
-/// final `/`-separated component of the full executable path.
+/// Returns `None` on syscall failure (process exited, a call refused
+/// by the caller's sandbox, or path-decoding failure). The basename is
+/// the final `/`-separated component of the full executable path.
 #[allow(unsafe_code)]
 fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
     let mut buf: [u8; PROC_PIDPATHINFO_MAXSIZE] = [0; PROC_PIDPATHINFO_MAXSIZE];
@@ -817,8 +822,8 @@ fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
     // SAFETY: `buf.as_mut_ptr` is valid for `PROC_PIDPATHINFO_MAXSIZE`
     // bytes (its declared length). The kernel writes a NUL-terminated
     // path of at most `cap_u32` bytes and returns the length excluding
-    // the NUL. PID validity is handled by the kernel; a stale/cross-user
-    // PID returns 0.
+    // the NUL. PID validity is handled by the kernel; a stale PID, or
+    // one refused by the caller's sandbox, returns 0.
     let len =
         unsafe { libsystem_ffi::proc_pidpath(pid, buf.as_mut_ptr().cast::<c_void>(), cap_u32) };
     if len <= 0 {

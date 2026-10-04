@@ -16,9 +16,9 @@
 //! | Device-wide GPU memory | `NVML` (`nvml.dll`) | `NVML` (`libnvidia-ml.so.1`) | `sysctl hw.memsize` (total) + `MTLDevice.recommendedMaxWorkingSetSize` (free) |
 //! | Device reserved memory | `NVML` v2 (`nvmlDeviceGetMemoryInfo_v2`, R510+) | `NVML` v2 (R510+) | n/a (`None` — UMA has no carve-out) |
 //! | Per-process GPU memory | `DXGI` (`IDXGIAdapter3::QueryVideoMemoryInfo`) | `NVML` (`nvmlDeviceGetComputeRunningProcesses`) | `ledger(LEDGER_ENTRY_INFO_V2).graphics_footprint` |
-//! | GPU-process listing (other PIDs) | `PDH` (`\GPU Process Memory(*)\Dedicated Usage` + `Shared Usage`) + `OpenProcess`/`QueryFullProcessImageNameW`, with a `CreateToolhelp32Snapshot` fallback (v0.2.8) for names `OpenProcess` denies even non-elevated; `nvidia-smi --query-compute-apps` fallback (NB: Windows `PDH` is **not** compute-only — it surfaces every GPU memory holder, including the compositor and browsers) | `NVML` + `/proc/<pid>/comm` (compute-only) | `proc_listpids` + per-PID `ledger` + `proc_pidpath` (same-user PIDs only; cross-user requires `sudo`) |
+//! | GPU-process listing (other PIDs) | `PDH` (`\GPU Process Memory(*)\Dedicated Usage` + `Shared Usage`) + `OpenProcess`/`QueryFullProcessImageNameW`, with a `CreateToolhelp32Snapshot` fallback (v0.2.8) for names `OpenProcess` denies even non-elevated; `nvidia-smi --query-compute-apps` fallback (NB: Windows `PDH` is **not** compute-only — it surfaces every GPU memory holder, including the compositor and browsers) | `NVML` + `/proc/<pid>/comm` (compute-only) | `proc_listpids` + per-PID `ledger` + `proc_pidpath`; on macOS the sandbox, not file ownership, decides what `hmn` can read; see [README Limitations, item 9](https://github.com/mi-for-the-rust-of-us/hypomnesis#binary-hmn) |
 //! | Spill detection (`SpillTracker`) | `PDH` `\GPU Adapter Memory(*)\Dedicated Usage` + `Shared Usage` (`WDDM 2.0`+) | n/a (`is_spill_measurable()` returns `false` — normal `CUDA` OOMs rather than silently paging) | n/a (`false` — `UMA` has nothing to spill *into*) |
-//! | Fallback | `nvidia-smi` subprocess | `nvidia-smi` subprocess | none (libSystem syscalls always succeed on Apple Silicon) |
+//! | Fallback | `nvidia-smi` subprocess | `nvidia-smi` subprocess | no second backend; process lookups try libproc first, then `sysctl` |
 //!
 //! ## Quick start
 //!
