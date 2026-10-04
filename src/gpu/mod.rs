@@ -43,6 +43,12 @@ mod proc_name;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal;
 
+// `kinfo_proc` records and the macOS `process_exists` lookup rule. Pure
+// byte parsing, so it also builds in every test build, where the Linux
+// and Windows CI jobs run its offset and length checks.
+#[cfg(any(all(target_os = "macos", feature = "metal"), test))]
+mod kinfo;
+
 /// Number of NVIDIA GPUs visible to `NVML` (`NVML`-canonical ordering).
 ///
 /// On Windows the count uses `NVML`; if `NVML` is unavailable, the
@@ -655,6 +661,8 @@ mod tests {
         }
         #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
         assert_eq!(process_exists(me), Some(true));
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        assert_eq!(process_exists(me), Some(true));
     }
 
     #[test]
@@ -666,6 +674,25 @@ mod tests {
         assert_ne!(process_exists(impossible), Some(true));
         #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
         assert_eq!(process_exists(impossible), Some(false));
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        assert_eq!(process_exists(impossible), None);
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn process_exists_finds_kernel_task_on_macos() {
+        // PID 0 is `kernel_task`: it has no executable path, so
+        // `proc_pidpath` says `ESRCH`, and only `sysctl` `KERN_PROC_PID`
+        // finds it.
+        assert_eq!(process_exists(0), Some(true));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn process_exists_says_false_for_a_dead_pid_on_macos() {
+        // `i32::MAX`: a valid `pid_t` no process holds (macOS PIDs stop
+        // at 99999).
+        assert_eq!(process_exists(2_147_483_647), Some(false));
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
