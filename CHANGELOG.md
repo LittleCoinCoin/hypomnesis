@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text; the Windows and Linux text is unchanged, byte for byte. From the
   [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md).
 
+- **On macOS the sandbox, not process ownership, decides what `hmn` can read** (`README.md`,
+  `docs/FAQ.md`, `ROADMAP.md`, rustdoc, `hmn --help`) — unsandboxed, `hmn ps` lists every user's
+  processes with no elevation, so no macOS text advises `sudo`; README Limitations item 9 states
+  what a sandbox refuses and what `hmn ps` then prints.
+  From the [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md),
+  F1.
+
 ### Fixed
 
 - **`hmn ps --device 1` on an Apple Silicon Mac says the index is out of range**
