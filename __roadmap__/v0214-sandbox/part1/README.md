@@ -25,14 +25,14 @@ The canonical limitation statement must not promise "measures what is permitted 
 ## Status
 ```mermaid
 graph TD
-    metal_bounds_check[Item 1: Metal arm in bounds_check]:::inprogress
-    process_exists_kinfo[Item 2: process_exists through kinfo_proc]:::inprogress
-    ps_failed_devices[Item 5: ps states skipped devices, exits 2 when all failed]:::inprogress
-    spill_cell_na[Item 7: n/a vs ? in SPILL and PAGED cells]:::inprogress
+    metal_bounds_check[Item 1: Metal arm in bounds_check]:::done
+    process_exists_kinfo[Item 2: process_exists through kinfo_proc]:::done
+    ps_failed_devices[Item 5: ps states skipped devices, exits 2 when all failed]:::done
+    spill_cell_na[Item 7: n/a vs ? in SPILL and PAGED cells]:::done
     close[Part 1 close]:::inprogress
-    remedy_macos[Item 6 pulled forward: macOS remedy text]:::inprogress
-    maintainer_review_a[A1: PR A review asks — package exclude, remedy split, toolchain freshness]:::amendment
-    test_review_b[A2: test review — strength, idiom, CONVENTIONS]:::amendment
+    remedy_macos[Item 6 pulled forward: macOS remedy text]:::done
+    maintainer_review_a[A1: PR A review asks — package exclude, remedy split, toolchain freshness]:::done
+    test_review_b[A2: test review — strength, idiom, CONVENTIONS]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -43,14 +43,14 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `metal_bounds_check.md` | 📄 Leaf Task | 🔄 In Progress |
-| `process_exists_kinfo.md` | 📄 Leaf Task | 🔄 In Progress |
-| `ps_failed_devices.md` | 📄 Leaf Task | 🔄 In Progress |
-| `spill_cell_na.md` | 📄 Leaf Task | 🔄 In Progress |
+| `metal_bounds_check.md` | 📄 Leaf Task | ✅ Done |
+| `process_exists_kinfo.md` | 📄 Leaf Task | ✅ Done |
+| `ps_failed_devices.md` | 📄 Leaf Task | ✅ Done |
+| `spill_cell_na.md` | 📄 Leaf Task | ✅ Done |
 | `close/` | 📁 Directory | 🔄 In Progress |
-| `remedy_macos.md` | 📄 Leaf Task | 🔄 In Progress |
-| `maintainer_review_a.md` | 📄 Leaf Task | 🔵 Amendment |
-| `test_review_b.md` | 📄 Leaf Task | 🔵 Amendment |
+| `remedy_macos.md` | 📄 Leaf Task | ✅ Done |
+| `maintainer_review_a.md` | 📄 Leaf Task | ✅ Done |
+| `test_review_b.md` | 📄 Leaf Task | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -61,3 +61,10 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `metal_bounds_check.md` | `task/metal_bounds_check` | dde079c (on PR B, mi-for-the-rust-of-us/hypomnesis#7; red f94c9e8 squashed into 98ebcde, A2 Step 1 folded in) | All gates PASS on the implementer's report (no verifier, as decided). macOS `NoGpuSource` text now pinned byte for byte and `bounds_check` edges pinned unsandboxed by A2. Linux/Windows leg of the error test ran first on PR B's CI (run 37210951264, green). |
+| `process_exists_kinfo.md` | `task/process_exists_kinfo` | dde1bf9, e0125b9 (Steps 1–3 squashed; A2 Step 5 folded in) | Sonnet verifier PASS: re-ran every gate, `// SAFETY:` and errno order sound, 9 mutants of the parser/decision rule each caught (the `pid == 0` one only by the `#[ignore]`d sandbox table). Verifier's low finding adjudicated by the coordinator: a zombie now reads `Some(true)` (was `Some(false)`), documented in the `process_exists` rustdoc and CHANGELOG at integration. Deviations accepted: full architecture statement in the module doc only; CONVENTIONS row renames `sysctl` → `sysctlbyname` beside the MIB form. Seam: kinfo API names/visibilities match the Step 2 contract `kinfo_enumeration` cites (verifier-checked). |
+| `ps_failed_devices.md` | `task/ps_failed_devices` | 4495484, 3e7f5d2 (red 8897a01 squashed; A2 Step 3 folded in) | Sonnet verifier PASS, maintainer's #6 rule confirmed (exit 2 only with a `(skipped)` line, both cli_ps tests). CI gate met on PR B run 37210951264: both macos-latest jobs SUCCESS, 4 macOS `cli_ps: … branch=expected` lines (with and without `--exit-status`), 0 `rejected`: the macOS VMs took the old exit codes, never the exit-2 path. Partial failure not CLI-testable on one GPU (PR body says so). |
+| `spill_cell_na.md` | `task/spill_cell_na` | 2fb515a, 453ed2e (red 931b5b3 squashed; A2 Step 2 folded in) | All gates PASS on the implementer's report. A2 replaced `if cfg!(windows)` with `#[cfg]` constants and removed the two redundant alignment tests, so the Step 2 filter counts 20, not 21 (recorded in A2). |
+| `remedy_macos.md` | `task/remedy_macos` | 1b24810 (red 5ddc6aa squashed; A2 Step 4 folded in) | Sonnet verifier PASS (8 mutants; the `process_sample` call site is pinned by grep only, PR body says so). CHANGELOG bullet restyled by the coordinator to the house format at integration. A2 deleted the tautological `remedy_outside_sandbox_is_the_macos_compile_time_platform`; the seam test PR C cites is kept. |
+| `maintainer_review_a.md` | `task/maintainer_review_a` | ef24b99, 76e47f9, fdf2f6c | A1: `cargo package --list` `__reports__/` 18 → 0 (98 → 80 files), R01 remedy-split sentence, `rustup check` freshness gate (also in the campaign gate set and the per-commit gate script), stale findings link fixed. No verifier (mechanical). |
+| `test_review_b.md` | `task/test_review_b` | folded into the five leaf commits above (90ca43d, 986d501, 6e2f423, edff7ef, 55a0d30 before folding) | A2: two read-only test reviews (library, CLI) with mutations and `#[allow]`→`#[expect]` checks; 11 fixes applied, every mutation now killed. Deviation accepted: the sandbox-table probe uses a profile unique to the file, since macOS lets a sandboxed process re-apply its own profile. 11 folded commits × 12 gates = 132/132 green before the force-push (807cd2f → fdf2f6c, user's yes). |
