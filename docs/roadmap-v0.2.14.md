@@ -310,6 +310,10 @@ To be filled in as items land. These fixtures must be re-run:
 Gate set on every pushed commit (a test-first red commit is squashed into its green successor
 before a branch is pushed):
 
+- `rustup check` reports `stable` up to date, so the local toolchain is the current release
+  before a green run is trusted: Rust 1.99.0's `assert_is_empty` lint reached CI before the
+  local `stable` did (`587a6d5`). The command exits `0` whether or not an update exists, so the
+  check is the `up to date` text on its `stable` line, not its exit status;
 - `cargo fmt --check`;
 - clippy with and without `--all-features`, and for `x86_64-unknown-linux-gnu`;
 - `cargo test --locked --all-features`;
@@ -346,7 +350,9 @@ Raised with the issue #3 reply, answered in the maintainer's comment of 2026-10-
 - **Remedy wording fixed:** `N unreadable — re-run outside the sandbox`, mirroring Windows'
   `N protected — re-run elevated for names`. The library docs lead with the count, since
   inside an App Sandbox there is no 'outside' (the `gpu_process_listing` rustdoc is written with
-  item 4).
+  item 4). PR B ships the macOS remedy on the existing `N protected` count
+  (`N protected — re-run outside the sandbox`); PR C adds the `N unreadable` count, which
+  carries the same remedy.
 - **`spilled: null` deferred to v0.3.0** under Principle 2. It is item 9, and the notice exists.
 - **Checked by hand, 2026-10-02:**
   - `sudo` under the report's profile is refused like uid 501 (exit `2`), so the macOS docs drop
@@ -368,7 +374,7 @@ Decided on 2026-10-03 while splitting the work into PRs; these are not from the 
 - **Every pushed commit passes the gate set.** A test-first red commit stays on the task branch
   while the work is done and is folded into its green successor before a branch is pushed, so no
   pushed commit is red. The set is *Verification*'s, extended with the MSRV check, CI's 1.88
-  clippy and test leg, and the two `ci.yml` feature-matrix checks.
+  clippy and test leg, the two `ci.yml` feature-matrix checks, and the toolchain-freshness check.
 
 ---
 
