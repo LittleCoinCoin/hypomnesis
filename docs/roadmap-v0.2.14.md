@@ -380,6 +380,8 @@ Decided on 2026-10-03 while splitting the work into PRs; these are not from the 
 - `__reports__/` dropped from the tree before the merge, as in `f3c6010`; it stays in history.
   Each link into it from `docs/` and `ROADMAP.md` becomes a plain mention of the file name and
   the SHA of the commit that last held it, so no link is left pointing at a deleted file.
+  Since PR B, `Cargo.toml` excludes `__reports__/` from the package, so a release cut before
+  the drop does not ship it.
 
 ---
 
