@@ -39,9 +39,10 @@ pub struct PsRow {
     /// this row's device, computed once per device and broadcast to
     /// every row on it — same "adapter-wide, same value on every row"
     /// shape `hmn watch`'s `spilling` field already uses. `None` when
-    /// not measurable (non-Windows, pre-`WDDM 2.0`, non-NVIDIA adapter,
-    /// or a live `PDH` sample failure) — never collapsed into
-    /// `Some(false)`.
+    /// not measurable — on Linux and macOS, where spill cannot exist (the
+    /// SPILL cell reads `n/a`), and on Windows pre-`WDDM 2.0`, on a
+    /// non-NVIDIA adapter, or on a live `PDH` sample failure (the cell
+    /// reads `?`) — never collapsed into `Some(false)`.
     pub spilling: Option<bool>,
     /// Whether this process is being *paged* — its device is spilling
     /// and its own SHARED is at least [`DEFAULT_SHARED_GROWTH_BYTES`],
@@ -376,8 +377,9 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         // One live spill sample per device (not per row): `snapshot_is_spilling`
         // is adapter-wide, so every row on this device gets the same
         // value — the same "broadcast" shape `hmn watch`'s `spilling`
-        // field already uses. `None` (not measurable) on non-Windows,
-        // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup.
+        // field already uses. `None` (not measurable) on Linux and macOS,
+        // where spill cannot exist (the cell reads n/a), and on Windows
+        // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup (it reads ?).
         //
         // Sampled *before* gpu_processes(idx), not after: the SHARED
         // column on each row and the SPILL verdict broadcast onto it
@@ -903,6 +905,15 @@ mod tests {
 
     // --- format_ps_table ---
 
+    // The SPILL cell of a row whose spill was not read (`spilling: None`):
+    // `?` on Windows, where spill exists; `n/a` elsewhere, where it cannot.
+    // Padded to three characters, so each table literal below holds one
+    // interpolation and the rest of the cell's padding.
+    #[cfg(windows)]
+    const UNKNOWN_SPILL: &str = "?  ";
+    #[cfg(not(windows))]
+    const UNKNOWN_SPILL: &str = "n/a";
+
     #[test]
     fn format_ps_table_empty_prints_header_only() {
         let s = format_ps_table(&[]);
@@ -920,8 +931,10 @@ mod tests {
             Some("RTX 5060 Ti"),
         );
         let s = format_ps_table(&[r]);
-        let expected = "PID    NAME        VRAM     SHARED  DEVICE       SPILL\n\
-                        12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID    NAME        VRAM     SHARED  DEVICE       SPILL\n\
+             12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -929,11 +942,14 @@ mod tests {
     fn format_ps_table_protected_name_renders_question_mark() {
         // Column widths: PID=3 (header), NAME=4 (header), VRAM=7
         // ("256 MiB"), SHARED=6 (header), DEVICE=11 ("RTX 5060 Ti"),
-        // SPILL=5 (header — "?" is shorter). Two-space separators.
+        // SPILL=5 (header — "?" and "n/a" are shorter). Two-space
+        // separators. The NAME `?` is on every platform.
         let r = row(99, Some("?"), 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+             99   ?     256 MiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -943,8 +959,10 @@ mod tests {
         // case — both go through the `unwrap_or("?")` path.
         let r = row(99, None, 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+             99   ?     256 MiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -969,7 +987,7 @@ mod tests {
         assert!(s.contains("a.exe  0 MiB  0 MiB   GPU 0   PAGED "));
         assert!(s.contains("b.exe  0 MiB  0 MiB   GPU 0   device"));
         assert!(s.contains("c.exe  0 MiB  0 MiB   GPU 0   no    "));
-        assert!(s.contains("d.exe  0 MiB  0 MiB   GPU 0   ?     "));
+        assert!(s.contains(&format!("d.exe  0 MiB  0 MiB   GPU 0   {UNKNOWN_SPILL}   ")));
     }
 
     #[test]

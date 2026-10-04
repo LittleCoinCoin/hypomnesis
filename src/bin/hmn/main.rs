@@ -130,11 +130,14 @@ mod watch;
                   paged — SHARED at or above the same 256 MiB floor — reads `PAGED` and the \
                   device's other processes read `device`; the summary line states the device's \
                   verdict once, with its free VRAM, shared bytes and paged count. `PAGED` names \
-                  who is being paged, not who caused the pressure. `?` (not `no`) means spill \
-                  isn't measurable here (non-Windows, pre-WDDM-2.0, a non-NVIDIA adapter, or a \
-                  PDH hiccup) — never rendered as `no`, so it can't be misread as \"measured, \
-                  not spilling\". Use `hmn watch`/`hmn spill` when the growth-over-baseline \
-                  distinction matters.\n\
+                  who is being paged, not who caused the pressure. When spill is not measured \
+                  the cell reads \
+                  `n/a` on Linux and macOS, where there is no shared-residency counter and so no \
+                  spill to measure; `?` (not `no`) on Windows when spill exists but cannot be \
+                  read now (pre-WDDM-2.0, a non-NVIDIA adapter, a PDH hiccup, or a build without \
+                  the `pdh` feature). Neither is ever rendered as `no`, so neither can be misread \
+                  as \"measured, not spilling\". Use `hmn watch`/`hmn spill` when the \
+                  growth-over-baseline distinction matters.\n\
                   - On Windows, `?` in the NAME column is now rare (since v0.2.8): a \
                   `CreateToolhelp32Snapshot` fallback (the same mechanism `Get-Process`/Task \
                   Manager use) resolves most PIDs `OpenProcess` can't, including ordinary \

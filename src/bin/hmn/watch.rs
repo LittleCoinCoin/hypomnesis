@@ -17,7 +17,7 @@ use hypomnesis::{
 
 use crate::format::{
     Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
-    json_string, json_string_or_null, json_value_or_null, spill_cell,
+    json_string, json_string_or_null, json_value_or_null, paged_cell, spill_cell,
 };
 use crate::ps::{
     PsRow, SortKey, filterable_name, footprint_bytes, matches_any, paged_verdict,
@@ -516,14 +516,10 @@ fn format_watch_per_pid_block(per_pid: &[WatchPidSummary]) -> String {
             format_vram(p.peak_used_bytes),
             format_vram(p.baseline_shared_bytes),
             format_vram(p.peak_shared_bytes),
-            // BORROW: explicit to_owned — the table owns its cells; `?`
-            // when spill was not measurable, as in the SPILL column.
-            match p.paged {
-                Some(true) => "yes",
-                Some(false) => "no",
-                None => "?",
-            }
-            .to_owned(),
+            // BORROW: explicit to_owned — the table owns its cells;
+            // `paged_cell` renders `n/a` or `?` when spill was not
+            // measurable, through the same core as the SPILL column.
+            paged_cell(p.paged).to_owned(),
         ]);
     }
     let header_prefix = "hmn watch: per-PID  ";
@@ -1379,6 +1375,13 @@ mod tests {
 
     // --- format_watch_rows_text / format_watch_header_text ---
 
+    // The SPILL or PAGED cell of a row whose spill was not read: `?` on
+    // Windows, where spill exists; `n/a` elsewhere, where it cannot.
+    #[cfg(windows)]
+    const UNKNOWN_SPILL: &str = "?";
+    #[cfg(not(windows))]
+    const UNKNOWN_SPILL: &str = "n/a";
+
     fn watch_row(
         pid: u32,
         name: Option<&str>,
@@ -1549,14 +1552,15 @@ mod tests {
     }
 
     #[test]
-    fn format_watch_rows_text_unmeasurable_spill_renders_question_mark_not_no() {
+    fn format_watch_rows_text_unmeasurable_spill_renders_the_unknown_glyph_not_no() {
         // None (no tracker / not measurable on this platform) must
-        // render distinctly from Some(false) ("no") — same "?, never
-        // no" convention `hmn ps`'s SPILL column uses.
+        // render distinctly from Some(false) ("no") — same "unknown,
+        // never no" convention `hmn ps`'s SPILL column uses: `?` on
+        // Windows, `n/a` where spill cannot exist (`n/a` holds no "no").
         let r = watch_row_opt(1, Some("py.exe"), 0, 0, 0, 0, None);
         let s = format_watch_rows_text(Duration::ZERO, &[r], 0);
-        assert!(s.contains('?'));
-        assert!(!s.contains("no"));
+        assert!(s.contains(UNKNOWN_SPILL), "{s}");
+        assert!(!s.contains("no"), "{s}");
     }
 
     #[test]
@@ -2452,7 +2456,7 @@ mod tests {
         };
         assert_eq!(cell("26476").as_deref(), Some("yes"));
         assert_eq!(cell("22108").as_deref(), Some("no"));
-        assert_eq!(cell("15534").as_deref(), Some("?"));
+        assert_eq!(cell("15534").as_deref(), Some(UNKNOWN_SPILL));
     }
 
     #[cfg(feature = "test-helpers")]
