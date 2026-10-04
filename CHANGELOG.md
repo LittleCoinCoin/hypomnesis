@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Text output only: `--json` keeps `null`. From the v0.2.13 macOS field check, finding F6
   ([`__reports__/field_check_v0213/01-findings_v1.md`](__reports__/field_check_v0213/01-findings_v1.md)).
 
+- **On macOS, `hmn ps` and `hmn watch` advise `re-run outside the sandbox`, not elevation**
+  (`src/bin/hmn/format.rs`, `ps.rs`, `watch.rs`, `main.rs`) — the `hmn ps` summary's clause
+  now reads `N protected — re-run outside the sandbox` and `hmn watch`'s growth hint reads
+  `re-run outside the sandbox to identify`, where both advised an elevation that does not change
+  what a macOS sandbox withholds. One compile-time selection, `format::remedy_text`, picks the
+  text; the Windows and Linux text is unchanged, byte for byte. From the
+  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md).
+
 ### Fixed
 
 - **`hmn ps --device 1` on an Apple Silicon Mac says the index is out of range**

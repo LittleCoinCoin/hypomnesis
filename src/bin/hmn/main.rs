@@ -158,7 +158,9 @@ mod watch;
                   substantial VRAM is worth investigating. The summary line's protected-count \
                   parenthetical counts `[protected]`/absent-name/the rare nvidia-smi-fallback \
                   literal `?` — not `[exited]`, since elevation can't help a process that's \
-                  already gone.\n\
+                  already gone. On macOS the same clause reads \
+                  `re-run outside the sandbox`: a sandbox, not the user, withholds the name, \
+                  and elevation does not lift it.\n\
                   - Pre-WDDM-2.0 Windows falls back to `nvidia-smi --query-compute-apps`, \
                   which is compute-only and may show `[N/A]` memory under consumer WDDM \
                   (parser drops those rows).\n\

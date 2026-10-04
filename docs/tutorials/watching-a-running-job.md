@@ -363,8 +363,9 @@ is a hard error (exit `2`).
 - **An unresolved watched PID that grows** — `None`/`?`, or (Windows-only,
   since v0.2.8) still `[protected]` after the `Toolhelp32Snapshot`
   fallback — committed or shared, by 256 MiB or more since attach, gets a
-  one-shot stderr hint (`re-run elevated to identify`), the same elevation
-  story as `hmn ps`'s unresolved rows (see the
+  one-shot stderr hint (`re-run elevated to identify` on Windows and Linux,
+  `re-run outside the sandbox to identify` on macOS), the same story as
+  `hmn ps`'s unresolved rows (see the
   [FAQ](../FAQ.md#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation)).
   `[exited]` does not trigger this hint — a process already confirmed gone
   cannot meaningfully "grow", and elevation cannot help identify it either.

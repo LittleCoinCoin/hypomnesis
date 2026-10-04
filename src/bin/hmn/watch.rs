@@ -16,8 +16,9 @@ use hypomnesis::{
 };
 
 use crate::format::{
-    Table, device_name_suffix, duration_ms, format_vram, format_vram_precise, iso8601_utc_millis,
-    json_string, json_string_or_null, json_value_or_null, paged_cell, spill_cell,
+    REMEDY_OUTSIDE_SANDBOX, Table, device_name_suffix, duration_ms, format_vram,
+    format_vram_precise, iso8601_utc_millis, json_string, json_string_or_null, json_value_or_null,
+    paged_cell, remedy_text, spill_cell,
 };
 use crate::ps::{
     PsRow, SortKey, filterable_name, footprint_bytes, matches_any, paged_verdict,
@@ -263,7 +264,10 @@ fn sleep_interruptibly(total: Duration, interrupted: &AtomicBool) {
 ///
 /// Emits the one-shot `?`-row growth hint to stderr the first interval
 /// an unresolved watched PID's cumulative growth crosses
-/// [`UNRESOLVED_GROWTH_HINT_BYTES`] — "unresolved" here means `name` is
+/// [`UNRESOLVED_GROWTH_HINT_BYTES`], worded by [`unresolved_growth_hint`]
+/// with this platform's remedy ([`REMEDY_OUTSIDE_SANDBOX`]: `re-run
+/// elevated to identify` on Windows and Linux, `re-run outside the
+/// sandbox to identify` on macOS) — "unresolved" here means `name` is
 /// `None` or (Windows-only, since v0.2.8) the `"[protected]"` bracket;
 /// `"[exited]"` does not count, since a process already confirmed gone
 /// cannot meaningfully "grow". Also detects a watched PID being recycled
@@ -348,8 +352,8 @@ fn process_sample(
             if grown >= UNRESOLVED_GROWTH_HINT_BYTES {
                 entry.growth_hint_fired = true;
                 eprintln!(
-                    "hmn watch: unresolved pid={pid} grew +{} since attach — re-run elevated to identify",
-                    format_vram(grown)
+                    "{}",
+                    unresolved_growth_hint(pid, grown, REMEDY_OUTSIDE_SANDBOX)
                 );
             }
         }
@@ -371,6 +375,17 @@ fn process_sample(
         });
     }
     out
+}
+
+/// The one-shot stderr hint [`process_sample`] prints when an unresolved
+/// watched PID has grown by `grown_bytes` since attach, ending with the
+/// [`remedy_text`] for `outside_sandbox` and the purpose `"to identify"`.
+fn unresolved_growth_hint(pid: u32, grown_bytes: u64, outside_sandbox: bool) -> String {
+    format!(
+        "hmn watch: unresolved pid={pid} grew +{} since attach — {}",
+        format_vram(grown_bytes),
+        remedy_text(outside_sandbox, "to identify")
+    )
 }
 
 /// Format one interval's rows as a text table (no header — the caller
@@ -1803,8 +1818,9 @@ mod tests {
     fn process_sample_growth_hint_does_not_fire_for_exited_bracket() {
         // `[exited]` means the process was already confirmed gone —
         // "growth" on a gone process is meaningless, so the hint (whose
-        // wording promises "re-run elevated to identify") must not fire
-        // for it the way it does for `None`/`[protected]`.
+        // Windows and Linux wording promises "re-run elevated to
+        // identify") must not fire for it the way it does for
+        // `None`/`[protected]`.
         let mut state = WatchState::new();
         let rows0 = vec![entry(100, Some("[exited]"), 0, 0)];
         let _ = process_sample(&rows0, &mut state, &[100], Duration::ZERO, None);
@@ -1812,6 +1828,22 @@ mod tests {
         let rows1 = vec![entry(100, Some("[exited]"), grown, 0)];
         let _ = process_sample(&rows1, &mut state, &[100], Duration::from_secs(5), None);
         assert!(!state.by_pid.get(&100).unwrap().growth_hint_fired);
+    }
+
+    #[test]
+    fn unresolved_growth_hint_keeps_the_elevated_text_off_macos() {
+        assert_eq!(
+            unresolved_growth_hint(7, 300 * 1024 * 1024, false),
+            "hmn watch: unresolved pid=7 grew +300 MiB since attach — re-run elevated to identify"
+        );
+    }
+
+    #[test]
+    fn unresolved_growth_hint_says_outside_the_sandbox_on_macos() {
+        assert_eq!(
+            unresolved_growth_hint(7, 300 * 1024 * 1024, true),
+            "hmn watch: unresolved pid=7 grew +300 MiB since attach — re-run outside the sandbox to identify"
+        );
     }
 
     // --- WatchState::track (--follow-new seen_order bookkeeping) ---

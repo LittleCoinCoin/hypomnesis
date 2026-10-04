@@ -300,6 +300,8 @@ unprivileged; elevation only improves *name resolution*. The
 `(N protected — re-run elevated for names)` summary-line count reflects
 only true `[protected]`/unresolved rows — `[exited]` rows are deliberately
 excluded, since elevation cannot help a process that has already exited.
+On macOS the clause reads `(N protected — re-run outside the sandbox)`: a
+macOS name is withheld by a sandbox, and elevation does not lift it.
 
 ## Why is there no `hmn kill` or `hmn spill --kill`?
 

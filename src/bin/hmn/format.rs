@@ -147,6 +147,39 @@ const fn unknown_cell(spill_cannot_exist: bool) -> &'static str {
     if spill_cannot_exist { "n/a" } else { "?" }
 }
 
+/// Whether this build's remedy for an unresolved process is "re-run
+/// outside the sandbox" (macOS) rather than "re-run elevated" (Windows,
+/// Linux). Selected at compile time because the reason is a platform
+/// fact, not a runtime one: on macOS only a sandbox withholds another
+/// process's name and bytes from `hmn`, and elevation does not lift a
+/// sandbox, so advising it there is wrong on every run. A `bool` rather
+/// than a hidden branch, so callers pass it to [`remedy_text`] and tests
+/// pin both texts on any OS.
+pub const REMEDY_OUTSIDE_SANDBOX: bool = cfg!(target_os = "macos");
+
+/// The remedy clause `hmn ps` and `hmn watch` print for a process they
+/// could not resolve: `re-run elevated <elevated_purpose>` when
+/// `outside_sandbox` is false, and `re-run outside the sandbox`
+/// followed by the purpose when it is true, except that `"for names"`
+/// is the one purpose macOS drops, since a sandbox withholds a
+/// process's bytes as well as its name.
+/// On macOS the purpose `"for names"` yields the bare `re-run outside the sandbox`.
+/// So a caller that wants the remedy with no suffix passes `"for names"`
+/// and prints the result verbatim, as the summary's protected clause
+/// does. Pure, so both platform texts are tested on any OS, the way
+/// [`spill_cell`] is; production callers pass [`REMEDY_OUTSIDE_SANDBOX`].
+#[must_use]
+pub fn remedy_text(outside_sandbox: bool, elevated_purpose: &str) -> String {
+    if !outside_sandbox {
+        return format!("re-run elevated {elevated_purpose}");
+    }
+    match elevated_purpose {
+        // BORROW: explicit to_owned — the caller owns the remedy text.
+        "for names" => "re-run outside the sandbox".to_owned(),
+        other => format!("re-run outside the sandbox {other}"),
+    }
+}
+
 /// Compute the width of a table column as `max(header.len(),
 /// max(cell.len()))`.
 pub fn column_width<'a>(header: &str, cells: impl IntoIterator<Item = &'a str>) -> usize {
@@ -633,6 +666,30 @@ mod tests {
             assert_eq!(spill_cell(None, None), "n/a");
             assert_eq!(paged_cell(None), "n/a");
         }
+    }
+
+    // --- remedy_text ---
+
+    #[test]
+    fn remedy_text_outside_sandbox_drops_names_and_keeps_other_purposes() {
+        assert_eq!(
+            remedy_text(true, "to identify"),
+            "re-run outside the sandbox to identify"
+        );
+    }
+
+    #[test]
+    fn remedy_text_elevated_keeps_the_v0_2_13_wording() {
+        assert_eq!(remedy_text(false, "for names"), "re-run elevated for names");
+        assert_eq!(
+            remedy_text(false, "to identify"),
+            "re-run elevated to identify"
+        );
+    }
+
+    #[test]
+    fn remedy_outside_sandbox_for_names_is_the_bare_macos_remedy() {
+        assert_eq!(remedy_text(true, "for names"), "re-run outside the sandbox");
     }
 
     // --- column_width ---

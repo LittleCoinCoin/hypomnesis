@@ -13,7 +13,8 @@ use hypomnesis::spill::DEFAULT_SHARED_GROWTH_BYTES;
 use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
-    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
+    REMEDY_OUTSIDE_SANDBOX, Table, format_vram, format_vram_precise, json_string_or_null,
+    json_value_or_null, remedy_text, spill_cell,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -551,8 +552,10 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 /// Build the stderr summary string for `hmn ps`. Format:
 /// `<N> GPU process[es] found[ matching <filters>][ (<parts>)][; device <D> spilling: [<F> free, ]<S> shared, <P> process[es] paged]….`,
 /// where `<parts>` joins, with `; `, whichever of `<X.Y> <unit> committed
-/// total`, `<M> protected — re-run elevated for names` and `<K> unnamed not
-/// matched` apply.
+/// total`, `<M> protected — <remedy>` and `<K> unnamed not matched` apply,
+/// where `<remedy>` is `re-run elevated for names` (Windows, Linux) or
+/// `re-run outside the sandbox` (macOS, `outside_sandbox == true`), as
+/// [`remedy_text`] words it.
 ///
 /// Three appendices after the noun, each elided when not applicable:
 ///
@@ -576,7 +579,9 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///
 ///   When at least one row is genuinely unresolvable, the parenthetical
 ///   carries a **protected continuation**
-///   (`; M protected — re-run elevated for names`) joined by `; `. A row
+///   (`; M protected — re-run elevated for names` on Windows and Linux,
+///   `; M protected — re-run outside the sandbox` on macOS, where
+///   `outside_sandbox == true`) joined by `; `. A row
 ///   counts as protected when `name.is_none()` (`NVML`'s
 ///   `/proc/<pid>/comm` unreadable on Linux; macOS cross-user PIDs whose
 ///   `ledger` syscall returned `EPERM` — `sudo hmn ps` is the equivalent
@@ -599,6 +604,13 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///   on Linux/macOS, where the fallback doesn't apply — any unresolved
 ///   row at all.
 ///
+///   Known residual: a process that exits between enumeration and its
+///   name lookup also has `name == None`, so it counts as protected, and
+///   on macOS the `re-run outside the sandbox` advice can fire for a
+///   process that is merely gone. v0.2.13's `re-run elevated` had the
+///   same race, so it is not new, and this function's `protected`
+///   counting is deliberately unchanged here.
+///
 ///   Under `--filter`, a third continuation, `; K unnamed not matched`,
 ///   counts the processes that passed `--pid` / `--min` but have no name
 ///   a pattern can be matched against ([`filterable_name`]) —
@@ -618,7 +630,12 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 /// "compute process" / "compute processes") because on the `PDH`
 /// Windows path the list includes every GPU memory holder
 /// (compositor, browsers, games, compute), not just `CUDA` contexts.
-fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) -> String {
+fn format_ps_summary_with(
+    rows: &[PsRow],
+    filters: &PsFilters,
+    notes: &SummaryNotes,
+    outside_sandbox: bool,
+) -> String {
     let count = rows.len();
     let protected = rows
         .iter()
@@ -656,7 +673,10 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) 
         parts.push(format!("{} committed total", format_vram(committed_total)));
     }
     if protected > 0 {
-        parts.push(format!("{protected} protected — re-run elevated for names"));
+        parts.push(format!(
+            "{protected} protected — {}",
+            remedy_text(outside_sandbox, "for names")
+        ));
     }
     if notes.unnamed > 0 {
         parts.push(format!("{} unnamed not matched", notes.unnamed));
@@ -683,6 +703,11 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) 
 
     out.push('.');
     out
+}
+
+/// [`format_ps_summary_with`] with this platform's remedy, [`REMEDY_OUTSIDE_SANDBOX`].
+fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) -> String {
+    format_ps_summary_with(rows, filters, notes, REMEDY_OUTSIDE_SANDBOX)
 }
 
 /// Format `ps` rows as a fixed-column text table. Always prints the
@@ -1509,7 +1534,12 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1519,7 +1549,12 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -1528,7 +1563,12 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -1552,10 +1592,11 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(
+            format_ps_summary_with(
                 &rows,
                 &filters(&[42], Some(0), None),
-                &SummaryNotes::default()
+                &SummaryNotes::default(),
+                false
             ),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
@@ -1570,7 +1611,12 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1587,8 +1633,69 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_outside_sandbox_says_the_macos_remedy() {
+        let mut rows = unprotected_rows(3);
+        rows.extend(protected_rows(1));
+        let s = format_ps_summary_with(
+            &rows,
+            &filters(&[], None, None),
+            &SummaryNotes::default(),
+            true,
+        );
+        assert_eq!(
+            s,
+            "4 GPU processes found (0 MiB committed total; 1 protected — re-run outside the sandbox)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_outside_sandbox_leaves_other_summaries_alone() {
+        let rows = unprotected_rows(2);
+        let f = filters(&[42], Some(0), None);
+        let outside = format_ps_summary_with(&rows, &f, &unnamed(3), true);
+        let elevated = format_ps_summary_with(&rows, &f, &unnamed(3), false);
+        assert_eq!(outside, elevated);
+        assert_eq!(
+            outside,
+            "2 GPU processes found matching pid=42 device=0 (0 MiB committed total; 3 unnamed not matched)."
+        );
+    }
+
+    // These two twins are what pins `REMEDY_OUTSIDE_SANDBOX` per platform.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn format_ps_summary_on_macos_says_re_run_outside_the_sandbox() {
+        assert_eq!(
+            format_ps_summary(
+                &protected_rows(2),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
+            "2 GPU processes found (0 MiB committed total; 2 protected — re-run outside the sandbox)."
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn format_ps_summary_off_macos_says_re_run_elevated() {
+        assert_eq!(
+            format_ps_summary(
+                &protected_rows(2),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
+            "2 GPU processes found (0 MiB committed total; 2 protected — re-run elevated for names)."
         );
     }
 
