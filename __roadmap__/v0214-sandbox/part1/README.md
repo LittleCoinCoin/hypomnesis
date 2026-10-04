@@ -13,7 +13,7 @@ Correct the statements that are wrong today and the silent wrong answers that ex
 - [ ] Branch `v0214-part1` exists at PR A's head (or at `main` once PR A merged)
 
 ## Success Gates
-- ⬜ All five leaves at this level and part1_close in close/ are `done` in `dirtree-rdm ls`
+- ⬜ All six leaves at this level (the five code leaves and amendment A1's maintainer_review_a) and part1_close in close/ are `done` in `dirtree-rdm ls`
 - ⬜ `gh pr checks <PR B>`: every job green, including both macos-latest jobs (R03: the exit-2 change must be seen passing on the VM runners, not assumed)
 - ⬜ Coordinator seam review recorded in the Progress notes: process_exists_kinfo's parser API is the one kinfo_enumeration's leaf text names, and part1_close's canonical statement describes PR B's behaviour (exit 2 plus a skip line under the report's profile), not PR C's
 
@@ -31,6 +31,7 @@ graph TD
     spill_cell_na[Item 7: n/a vs ? in SPILL and PAGED cells]:::inprogress
     close[Part 1 close]:::planned
     remedy_macos[Item 6 pulled forward: macOS remedy text]:::inprogress
+    maintainer_review_a[A1: PR A review asks — package exclude, remedy split, toolchain freshness]:::amendment
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -47,10 +48,12 @@ graph TD
 | `spill_cell_na.md` | 📄 Leaf Task | 🔄 In Progress |
 | `close/` | 📁 Directory | ⬜ Planned |
 | `remedy_macos.md` | 📄 Leaf Task | 🔄 In Progress |
+| `maintainer_review_a.md` | 📄 Leaf Task | 🔵 Amendment |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
 |:---|:-----|:-------|:------------|:----------|
+| A1 | 2026-10-04 | `__reports__/v0214_roadmap/06-amendment_a1_maintainer_review_v0.md` | ["maintainer_review_a.md"] | PR A review (merged 1bb9b22) asks PR B for the `__reports__/` package exclude, the remedy-split sentence, a toolchain-freshness gate and a stale-link fix |
 
 ## Progress
 | Node | Branch | Commits | Notes |
