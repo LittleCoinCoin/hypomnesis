@@ -173,7 +173,7 @@ mod watch;
                   (`graphics_footprint` ledger entry); the kernel evicts idle Metal pages, \
                   so the same PID may report different values across calls. Same \
                   resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS`.\n\
-                  - macOS: the sandbox, not file ownership, decides what `hmn` can read — \
+                  - macOS: the sandbox, not process ownership, decides what `hmn` can read — \
                   unsandboxed, every user's processes are listed and elevation does not \
                   help; see README Limitations, item 9."
 )]
@@ -200,7 +200,7 @@ enum Commands {
     /// NVML. On Windows / WDDM 2.0+: every GPU memory holder via PDH
     /// (compositor, browsers, compute, etc.). On macOS: every
     /// process holding `graphics_footprint` ledger bytes that the
-    /// sandbox lets it read (the sandbox, not file ownership, decides;
+    /// sandbox lets it read (the sandbox, not process ownership, decides;
     /// see README Limitations, item 9). See `hmn --help`
     /// Limitations for the full per-platform breakdown.
     Ps {

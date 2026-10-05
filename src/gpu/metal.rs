@@ -8,7 +8,7 @@
 //! unified-memory-architecture (`UMA`) Apple Silicon `SoC` the GPU and
 //! CPU share the same physical pages, so device-wide `total_bytes` is
 //! `sysctl hw.memsize` and the adapter name is the CPU brand string
-//! (`machdep.cpu.brand_string`). File ownership plays no part: a ledger
+//! (`machdep.cpu.brand_string`). Process ownership plays no part: a ledger
 //! read refused by the caller's sandbox is skipped silently in
 //! enumeration (see README Limitations, item 9).
 //!
