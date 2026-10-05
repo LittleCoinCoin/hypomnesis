@@ -771,7 +771,7 @@ fn proc_pidpath_lookup(pid: i32) -> PathLookup {
 /// pid)` call: `(rc, errno, buffer, len)`, with `errno` 0 when `rc` is.
 ///
 /// A buffer of one record is enough for a PID query; a record that
-/// would not fit fails with `ENOMEM`, which classifies as `Refused`
+/// would not fit fails with `ENOMEM`, which classifies as `Unusable`
 /// ("can't tell"). Kept apart from [`kern_proc_pid_lookup`] so the live
 /// layout test can check the raw record.
 #[allow(unsafe_code)]

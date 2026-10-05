@@ -60,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `process_exists` now asks `sysctl` `KERN_PROC_PID`, which finds it, so `hmn watch 0` no longer
   warns. A caller whose sandbox refuses libproc but allows `kern.proc` now gets `Some(true)` or
   `Some(false)` where it got `None`; with both refused the answer is `None` unless `proc_pidpath`
-  said `ESRCH`. The record is read by a private `kinfo_proc` parser with no `unsafe`; its 648-byte
+  said `ESRCH`, and a `kinfo_proc` record that does not fit `sysctl`'s buffer (`ENOMEM`) gives
+  `None`. The record is read by a private `kinfo_proc` parser with no `unsafe`; its 648-byte
   layout (`p_pid` at 40, `p_comm` at 243) was verified on arm64 natively (Apple M3 Pro) and on
   `x86_64` under Rosetta 2, by the SDK header and a live read of the test process; native Intel
   hardware is untested. A zombie, exited but not yet reaped, now reads `Some(true)` (it read

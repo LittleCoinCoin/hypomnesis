@@ -147,8 +147,10 @@ that reads each PID separately, so it is the one where some rows can go missing.
   - Not verified: a native Intel Mac.
     Rosetta 2 runs x86_64 userland on the arm64 kernel, so it cannot show what an
     Intel kernel returns, and `ROADMAP.md` lists Apple Metal on Intel Macs as untested hardware
-    (Principle 3, no Intel-Mac test hardware). This release changes neither, so the whole-records
-    length check stays the parser's only guard against a layout that differs.
+    (Principle 3, no Intel-Mac test hardware). This release changes neither, so two guards stand
+    against a layout that differs: the whole-records length check and the PID cross-check. A
+    record larger than 648 bytes does not fit the buffer, so `sysctl` fails with `ENOMEM`, which
+    reads as "can't tell".
 - **A per-PID read has four outcomes, not two.** `read_graphics_footprint` stops folding
   everything into `None`. It returns bytes; *denied* (`EPERM`); *gone* (`ESRCH`); or
   *unavailable*, when the `graphics_footprint` template index did not resolve. *Unavailable*, or

@@ -49,6 +49,11 @@ pub(super) const P_COMM_SIZE: usize = 17;
 /// path (`kernel_task`); `sysctl` never answers it.
 pub(super) const ESRCH: i32 = 3;
 
+/// `ENOMEM` from `<errno.h>`: the buffer is too small. `sysctl` answers
+/// it when the record does not fit the buffer, and then copies nothing
+/// and writes back a `len` of 0.
+pub(super) const ENOMEM: i32 = 12;
+
 /// `CTL_KERN` from `<sys/sysctl.h>`: the top-level kernel MIB.
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(super) const CTL_KERN: i32 = 1;
@@ -89,13 +94,15 @@ pub(super) enum PidLookup {
     Record,
     /// The call succeeded with no record: no such process.
     NoRecord,
-    /// The call failed with this `errno` (a sandbox refusal, ...).
+    /// The call failed with this `errno`, any but `ENOMEM` (a sandbox
+    /// refusal, ...).
     Refused {
         /// The `errno` `sysctl` left.
         errno: i32,
     },
     /// The call succeeded but its buffer is not one record for the
-    /// requested PID: can't tell.
+    /// requested PID, or it failed with `ENOMEM` because the record does
+    /// not fit the buffer: can't tell.
     Unusable,
 }
 
@@ -137,14 +144,17 @@ pub(super) fn parse_kinfo_records(buf: &[u8]) -> Option<Vec<KinfoRecord>> {
 /// `rc`, the `errno` it left, its buffer and the `len` it wrote back,
 /// for the requested `pid`.
 ///
-/// `rc` is read first: a failed call is `Refused` and `buf` and `len`
-/// are never read, because a refused call still leaves `len` at 648 and
-/// the buffer zeroed (measured under a sandbox that denies `kern.proc`),
-/// which would parse as a record for PID 0. A successful call that wrote
-/// nothing (`len == 0`) is `NoRecord`: no such process. Otherwise the
-/// first `len` bytes must be exactly one record for `pid`; anything
-/// else (a partial record, two records, another PID, a `len` past the
-/// buffer) is `Unusable`.
+/// `rc` is read first, and on a failed call `buf` and `len` are never
+/// read, because a refused call still leaves `len` at 648 and the buffer
+/// zeroed (measured under a sandbox that denies `kern.proc`), which would
+/// parse as a record for PID 0. A call that failed with `ENOMEM` is
+/// `Unusable`: the kernel's record is larger than `KINFO_PROC_SIZE`, so
+/// it did not fit and nothing was copied. Any other failure is `Refused`.
+///
+/// A successful call that wrote nothing (`len == 0`) is `NoRecord`: no
+/// such process. Otherwise the first `len` bytes must be exactly one
+/// record for `pid`; anything else (a partial record, two records,
+/// another PID, a `len` past the buffer) is `Unusable`.
 pub(super) fn classify_kern_proc_pid(
     rc: i32,
     errno: i32,
@@ -152,6 +162,9 @@ pub(super) fn classify_kern_proc_pid(
     len: usize,
     pid: i32,
 ) -> PidLookup {
+    if rc != 0 && errno == ENOMEM {
+        return PidLookup::Unusable;
+    }
     if rc != 0 {
         return PidLookup::Refused { errno };
     }
@@ -177,7 +190,7 @@ pub(super) fn classify_kern_proc_pid(
 /// | no path | `NoRecord` | `Some(false)` |
 /// | no path, `ESRCH` | `Refused` | `Some(false)` |
 /// | no path, other `errno` | `Refused` | `None` |
-/// | no path | `Unusable` | `None` |
+/// | no path | `Unusable` (including `ENOMEM`) | `None` |
 ///
 /// A path answers first, so every case `proc_pidpath` answered before
 /// keeps its answer. `kernel_task` (PID 0) has no path, so `proc_pidpath`
@@ -283,6 +296,28 @@ mod tests {
             classify_kern_proc_pid(-1, 1, &zeroed, 648, 0),
             PidLookup::Refused { errno: 1 }
         );
+        // Every errno but `ENOMEM` is `Refused` (here `EINVAL`), so a dead
+        // PID whose `proc_pidpath` says `ESRCH` keeps reading `Some(false)`.
+        assert_eq!(
+            classify_kern_proc_pid(-1, 22, &zeroed, 648, 0),
+            PidLookup::Refused { errno: 22 }
+        );
+    }
+
+    #[test]
+    fn classify_kern_proc_pid_a_record_that_does_not_fit_is_unusable() {
+        // A kernel whose `kinfo_proc` is larger than 648 bytes copies
+        // nothing, fails with `ENOMEM` and writes back a `len` of 0.
+        let zeroed = [0_u8; 648];
+        assert_eq!(
+            classify_kern_proc_pid(-1, 12, &zeroed, 0, 0),
+            PidLookup::Unusable
+        );
+        // `errno` counts only when `rc` says the call failed.
+        assert_eq!(
+            classify_kern_proc_pid(0, 12, &record(1, b"launchd"), 648, 1),
+            PidLookup::Record
+        );
     }
 
     #[test]
@@ -350,6 +385,12 @@ mod tests {
             Some(false)
         );
         assert_eq!(decide_exists(esrch, || PidLookup::Unusable), None);
+        // A record that does not fit (`ENOMEM`) is can't tell, not
+        // no such process.
+        assert_eq!(
+            decide_exists(esrch, || classify_kern_proc_pid(-1, 12, &[0_u8; 648], 0, 0)),
+            None
+        );
 
         let eperm = PathLookup::Failed { errno: 1 };
         assert_eq!(decide_exists(eperm, || PidLookup::Record), Some(true));
