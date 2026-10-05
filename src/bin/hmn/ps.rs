@@ -13,8 +13,8 @@ use hypomnesis::spill::DEFAULT_SHARED_GROWTH_BYTES;
 use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
-    REMEDY_OUTSIDE_SANDBOX, Table, format_vram, format_vram_precise, json_string_or_null,
-    json_value_or_null, remedy_text, spill_cell,
+    REMEDY_OUTSIDE_SANDBOX, RemedyPurpose, Table, format_vram, format_vram_precise,
+    json_string_or_null, json_value_or_null, remedy_text, spill_cell,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -555,7 +555,7 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 /// total`, `<M> protected — <remedy>` and `<K> unnamed not matched` apply,
 /// where `<remedy>` is `re-run elevated for names` (Windows, Linux) or
 /// `re-run outside the sandbox` (macOS, `outside_sandbox == true`), as
-/// [`remedy_text`] words it.
+/// [`remedy_text`] words it for [`RemedyPurpose::Names`].
 ///
 /// Three appendices after the noun, each elided when not applicable:
 ///
@@ -668,7 +668,7 @@ fn format_ps_summary_with(
     if protected > 0 {
         parts.push(format!(
             "{protected} protected — {}",
-            remedy_text(outside_sandbox, "for names")
+            remedy_text(outside_sandbox, RemedyPurpose::Names)
         ));
     }
     if notes.unnamed > 0 {

@@ -16,7 +16,7 @@ use hypomnesis::{
 };
 
 use crate::format::{
-    REMEDY_OUTSIDE_SANDBOX, Table, device_name_suffix, duration_ms, format_vram,
+    REMEDY_OUTSIDE_SANDBOX, RemedyPurpose, Table, device_name_suffix, duration_ms, format_vram,
     format_vram_precise, iso8601_utc_millis, json_string, json_string_or_null, json_value_or_null,
     paged_cell, remedy_text, spill_cell,
 };
@@ -379,12 +379,12 @@ fn process_sample(
 
 /// The one-shot stderr hint [`process_sample`] prints when an unresolved
 /// watched PID has grown by `grown_bytes` since attach, ending with the
-/// [`remedy_text`] for `outside_sandbox` and the purpose `"to identify"`.
+/// [`remedy_text`] for `outside_sandbox` and [`RemedyPurpose::Identify`].
 fn unresolved_growth_hint(pid: u32, grown_bytes: u64, outside_sandbox: bool) -> String {
     format!(
         "hmn watch: unresolved pid={pid} grew +{} since attach — {}",
         format_vram(grown_bytes),
-        remedy_text(outside_sandbox, "to identify")
+        remedy_text(outside_sandbox, RemedyPurpose::Identify)
     )
 }
 

@@ -157,27 +157,38 @@ const fn unknown_cell(spill_cannot_exist: bool) -> &'static str {
 /// pin both texts on any OS.
 pub const REMEDY_OUTSIDE_SANDBOX: bool = cfg!(target_os = "macos");
 
+/// What a remedy clause asks the user to re-run `hmn` for; [`remedy_text`]
+/// words it.
+///
+/// Binary-internal dispatch enum, not a library type — matched
+/// exhaustively by [`remedy_text`], the sole place that interprets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemedyPurpose {
+    /// The names of protected rows, on `hmn ps`'s summary line
+    /// (`for names`).
+    Names,
+    /// An unresolved PID whose memory grew, in `hmn watch`'s growth hint
+    /// (`to identify`).
+    Identify,
+}
+
 /// The remedy clause `hmn ps` and `hmn watch` print for a process they
-/// could not resolve: `re-run elevated <elevated_purpose>` when
-/// `outside_sandbox` is false, and `re-run outside the sandbox`
-/// followed by the purpose when it is true, except that `"for names"`
-/// is the one purpose macOS drops, since a sandbox withholds a
-/// process's bytes as well as its name.
-/// On macOS the purpose `"for names"` yields the bare `re-run outside the sandbox`.
-/// So a caller that wants the remedy with no suffix passes `"for names"`
-/// and prints the result verbatim, as the summary's protected clause
-/// does. Pure, so both platform texts are tested on any OS, the way
+/// could not resolve: `re-run elevated` when `outside_sandbox` is false
+/// and `re-run outside the sandbox` when it is true, followed by the
+/// words of `purpose` (`for names`, `to identify`), with one exception.
+/// On macOS the purpose `RemedyPurpose::Names` yields the bare `re-run outside the sandbox`.
+/// Pure, so both platform texts are tested on any OS, the way
 /// [`spill_cell`] is; production callers pass [`REMEDY_OUTSIDE_SANDBOX`].
 #[must_use]
-pub fn remedy_text(outside_sandbox: bool, elevated_purpose: &str) -> String {
-    if !outside_sandbox {
-        return format!("re-run elevated {elevated_purpose}");
-    }
-    match elevated_purpose {
-        // BORROW: explicit to_owned — the caller owns the remedy text.
-        "for names" => "re-run outside the sandbox".to_owned(),
-        other => format!("re-run outside the sandbox {other}"),
-    }
+pub fn remedy_text(outside_sandbox: bool, purpose: RemedyPurpose) -> String {
+    let text = match (outside_sandbox, purpose) {
+        (false, RemedyPurpose::Names) => "re-run elevated for names",
+        (false, RemedyPurpose::Identify) => "re-run elevated to identify",
+        (true, RemedyPurpose::Names) => "re-run outside the sandbox",
+        (true, RemedyPurpose::Identify) => "re-run outside the sandbox to identify",
+    };
+    // BORROW: explicit to_owned — the caller owns the remedy text.
+    text.to_owned()
 }
 
 /// Compute the width of a table column as `max(header.len(),
@@ -671,25 +682,31 @@ mod tests {
     // --- remedy_text ---
 
     #[test]
-    fn remedy_text_outside_sandbox_drops_names_and_keeps_other_purposes() {
+    fn remedy_text_outside_sandbox_keeps_to_identify() {
         assert_eq!(
-            remedy_text(true, "to identify"),
+            remedy_text(true, RemedyPurpose::Identify),
             "re-run outside the sandbox to identify"
         );
     }
 
     #[test]
     fn remedy_text_elevated_keeps_the_v0_2_13_wording() {
-        assert_eq!(remedy_text(false, "for names"), "re-run elevated for names");
         assert_eq!(
-            remedy_text(false, "to identify"),
+            remedy_text(false, RemedyPurpose::Names),
+            "re-run elevated for names"
+        );
+        assert_eq!(
+            remedy_text(false, RemedyPurpose::Identify),
             "re-run elevated to identify"
         );
     }
 
     #[test]
     fn remedy_outside_sandbox_for_names_is_the_bare_macos_remedy() {
-        assert_eq!(remedy_text(true, "for names"), "re-run outside the sandbox");
+        assert_eq!(
+            remedy_text(true, RemedyPurpose::Names),
+            "re-run outside the sandbox"
+        );
     }
 
     // --- column_width ---
