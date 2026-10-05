@@ -8,7 +8,7 @@ Requested in the #6 review: "Item 2 … brings the `sysctl` + `kinfo_proc` parse
 
 - **`sysctl` declaration** (`src/gpu/metal.rs`, `libsystem_ffi`): `name: *mut c_int, namelen: u32, oldp, oldlenp: *mut usize, newp, newlen: usize` matches `<sys/sysctl.h>`.
 - **The call's `// SAFETY:`** holds. The MIB is `[i32; 4]` with `namelen` 4. The buffer is `[u8; 648]`, alignment 1, valid for `len` bytes, and `len` is in/out; the kernel never writes past the length it was given. `newp`/`newlen` are null/0.
-- **errno**: `last_os_error()` is the first call after the `unsafe` block. Only `proc_pidpath`'s errno reaches the decision (`Refused { .. }` ignores the `sysctl` errno), so capture order cannot change an answer.
+- **errno**: `last_os_error()` is the first call after the `unsafe` block. `proc_pidpath`'s errno decides a refused lookup (`Refused { .. }` ignores the `sysctl` errno); `sysctl`'s errno counts only as `ENOMEM`, which classifies as `Unusable` (see the maintainer's review below). Both are read right after their call.
 - **Parser bounds** (`src/gpu/kinfo.rs`): `as_chunks` and `.get(..)` only, no indexing, no `as`. A partial record is rejected. `rc` is checked before `len`, so a refused call that leaves `len == 648` over a zeroed buffer is never parsed as a PID 0 record.
 - **Mutations**, each run against the suite. Every one failed at least one test:
 
@@ -64,3 +64,24 @@ Not adopted: rows that vanish from a capture (PR C's guards require at least one
 Second review, of the revision: PASS WITH NOTES. The Python scripts match the shell ones on 31 argument and capture combinations: same stdout and exit codes, and one extra usage line on stderr for a missing directory. Adopted: three sentences that described a release rather than the tool (the `ledger`-only case in README item 9, the CHANGELOG bullet, the Intel row of ROADMAP) and the README sentence "only a sandbox withholds a macOS name" are reworded as plain statements.
 
 Recorded and left as is: the captures' process names are unsalted 8-hex SHA-256 prefixes, so a common app name can be recovered by trying candidates.
+
+## The maintainer's review, and the answer
+
+PCfVW requested changes on 2026-10-05, after running the CI gate set on Windows and on Ubuntu WSL2 with stable and 1.88, `cargo deny`, the package list, the 19 `#[ignore]`d live tests and each commit on its own. His own adversarial review of the `sysctl`/`kinfo_proc` code found no memory-safety problem. He asked for two changes and six nits.
+
+- **`ENOMEM`.** A `kinfo_proc` larger than 648 bytes makes `sysctl` fail with `ENOMEM` and copy nothing, and `Refused` with `proc_pidpath`'s `ESRCH` then read `Some(false)`. `ENOMEM` classifies as `Unusable`, so the answer is `None`, and every other errno stays `Refused`.
+- **"process ownership"** replaces "file ownership" at five sites.
+- **Nits:** `remedy_text` takes a `RemedyPurpose` enum, named after its domain like `SortKey` and `PsJudgement`. Also: `namelen` derived from the MIB; BSD, not POSIX; `comm_of`'s cut from `P_COMM_SIZE`; a plain-text `DxgiQueryResult` mention; and the `cli_ps` sandbox test fails instead of skipping.
+
+Three agents reviewed the answer before it was pushed:
+
+- **An adversarial verifier.** PASS WITH NOTES. Its three doc notes were adopted: `Refused`'s doc, the `decide_exists` table, and `remedy_text`'s opening sentence.
+- **A test reviewer.** It asked what each test answers and tried 21 wrong implementations, of which 19 were caught. Two survived, and two assertions now catch them:
+  - narrowing `Refused` to `EPERM`: an `EINVAL` failure stays `Refused`;
+  - reading `errno` when `rc` is 0: a valid record with `errno` 12 still reads `Record`.
+  A stale test name was corrected.
+- **A coverage reviewer.** Every request and nit has a commit and a line. It adopted three items:
+  - the `kern.proc`-hiding residual, now written in `process_exists`'s rustdoc;
+  - one statement of the macOS remedy rule, not two;
+  - this record's errno sentence.
+
