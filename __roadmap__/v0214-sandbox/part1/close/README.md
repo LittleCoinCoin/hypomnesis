@@ -37,6 +37,7 @@ graph TD
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
 |:---|:-----|:-------|:------------|:----------|
+| A3 | 2026-10-05 | `__reports__/v0214_roadmap/08-amendment_a3_part1_close_revision_v0.md` | [] (part1_close deliverables revised) | Verifier notes adjudicated with the user: harness ported to Python (`capture.py`, `compare.py`), `ps_json` row count dropped, Codex attribution added, prose made final-state only |
 
 ## Progress
 | Node | Branch | Commits | Notes |
