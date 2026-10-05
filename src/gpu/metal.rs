@@ -49,8 +49,9 @@ mod libsystem_ffi {
     use core::ffi::{c_char, c_int, c_void};
 
     // SAFETY: These are stable libSystem entry points with documented
-    // C ABI. `getpid`, `sysctl` and `sysctlbyname` are POSIX.
-    // `proc_listpids` and `proc_pidpath` are declared in `<libproc.h>`.
+    // C ABI. `getpid` is POSIX. `sysctl` and `sysctlbyname` are BSD,
+    // declared in `<sys/sysctl.h>`. `proc_listpids` and `proc_pidpath`
+    // are declared in `<libproc.h>`.
     // `ledger` has no user-space header but its ABI is fixed
     // (`SYS_ledger = 373`).
     // Each call's safety contract is upheld at its call site.
@@ -220,7 +221,7 @@ struct LedgerEntryInfo {
 
 /// Combined result of a single Metal device-wide query.
 ///
-/// Shape mirrors [`super::dxgi::DxgiQueryResult`] in spirit: the device
+/// Shape mirrors `super::dxgi::DxgiQueryResult` in spirit: the device
 /// total, the device-wide working-set budget, and the adapter name.
 /// Unlike `DxgiQueryResult`, there is no per-process figure here — the
 /// per-process path is [`process_gpu_info`], which reads
@@ -779,14 +780,17 @@ fn kern_proc_pid_raw(pid: i32) -> (i32, i32, [u8; KINFO_PROC_SIZE], usize) {
     let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid];
     let mut buf = [0_u8; KINFO_PROC_SIZE];
     let mut len = KINFO_PROC_SIZE;
-    // SAFETY: `mib` holds the 4 ints `namelen` says; `buf` is valid for
+    // CAST: usize → u32, a 4-element MIB; fits.
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let namelen = mib.len() as u32;
+    // SAFETY: `mib` holds the `namelen` ints; `buf` is valid for
     // `len` bytes, and `len` is in/out (the kernel writes back how many
     // bytes it stored, never more than it was given); `newp`/`newlen`
     // are null/zero, a read-only query.
     let rc = unsafe {
         libsystem_ffi::sysctl(
             mib.as_mut_ptr(),
-            4,
+            namelen,
             buf.as_mut_ptr().cast::<c_void>(),
             &raw mut len,
             core::ptr::null_mut(),
@@ -853,13 +857,17 @@ fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::gpu::kinfo::parse_kinfo_records;
+    use crate::gpu::kinfo::{self, parse_kinfo_records};
     use std::os::unix::ffi::OsStrExt;
 
     /// The first 16 bytes (`MAXCOMLEN`) of a path's file name.
     fn comm_of(path: &std::path::Path) -> Vec<u8> {
+        // BORROW: `as_bytes` views the file name's bytes in place.
         let name = path.file_name().unwrap().as_bytes();
-        name.get(..name.len().min(16)).unwrap().to_vec()
+        // BORROW: `to_vec` copies the name out of `path`.
+        name.get(..name.len().min(kinfo::P_COMM_SIZE - 1))
+            .unwrap()
+            .to_vec()
     }
 
     /// Anchors the 648-byte layout on the running kernel: synthetic
