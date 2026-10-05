@@ -33,6 +33,7 @@ graph TD
     remedy_macos[Item 6 pulled forward: macOS remedy text]:::done
     maintainer_review_a[A1: PR A review asks — package exclude, remedy split, toolchain freshness]:::done
     test_review_b[A2: test review — strength, idiom, CONVENTIONS]:::done
+    maintainer_review_b[A4: PR B review — ENOMEM, process ownership, nits]:::amendment
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -51,12 +52,14 @@ graph TD
 | `remedy_macos.md` | 📄 Leaf Task | ✅ Done |
 | `maintainer_review_a.md` | 📄 Leaf Task | ✅ Done |
 | `test_review_b.md` | 📄 Leaf Task | ✅ Done |
+| `maintainer_review_b.md` | 📄 Leaf Task | 🔵 Amendment |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
 |:---|:-----|:-------|:------------|:----------|
 | A1 | 2026-10-04 | `__reports__/v0214_roadmap/06-amendment_a1_maintainer_review_v0.md` | ["maintainer_review_a.md"] | PR A review (merged 1bb9b22) asks PR B for the `__reports__/` package exclude, the remedy-split sentence, a toolchain-freshness gate and a stale-link fix |
 | A2 | 2026-10-04 | `__reports__/v0214_roadmap/07-amendment_a2_test_review_v0.md` | ["test_review_b.md"] | Two read-only test reviews found a vacuous hardware test, weak and tautological tests, an unneeded lint allow and foreign idiom; fixes fold into the leaf commits before a force-push |
+| A4 | 2026-10-06 | `__reports__/v0214_roadmap/09-amendment_a4_pr_b_review_v0.md` | ["maintainer_review_b.md"] | Maintainer's CHANGES_REQUESTED on PR B: ENOMEM reads as can't tell, process (not file) ownership, six nits including a `RemedyPurpose` enum |
 
 ## Progress
 | Node | Branch | Commits | Notes |
