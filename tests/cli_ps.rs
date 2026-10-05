@@ -91,11 +91,12 @@ fn ps_exit_status_is_1_when_nothing_is_listed_and_opt_in() {
 
 /// Run `hmn` with `args` under the field report's profile P, which denies
 /// `process-info*` except on itself, returning its exit code, stdout and
-/// stderr; `None` when `sandbox-exec` cannot apply a profile because this
-/// test already runs inside a sandbox.
+/// stderr. Fails when `sandbox-exec` cannot apply P because this test
+/// already runs inside a sandbox: a run that never applied P must not
+/// report `ok`.
 #[cfg(target_os = "macos")]
 #[allow(clippy::expect_used)] // test-only
-fn hmn_under_denied_process_info(args: &[&str]) -> Option<(Option<i32>, String, String)> {
+fn hmn_under_denied_process_info(args: &[&str]) -> (Option<i32>, String, String) {
     let out = Command::new("/usr/bin/sandbox-exec")
         .arg("-p")
         .arg("(version 1)(allow default)(deny process-info*)(allow process-info* (target self))")
@@ -104,18 +105,16 @@ fn hmn_under_denied_process_info(args: &[&str]) -> Option<(Option<i32>, String, 
         .output()
         .expect("failed to run sandbox-exec");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    if stderr.contains("sandbox_apply") {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "cli_ps: skipped, already sandboxed: {stderr}"
-        );
-        return None;
-    }
-    Some((
+    assert!(
+        !stderr.contains("sandbox_apply"),
+        "sandbox-exec cannot apply profile P here (already inside a sandbox?), \
+         so the denied-process-info case cannot be exercised: {stderr}"
+    );
+    (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr,
-    ))
+    )
 }
 
 /// Inside a sandbox that denies `process-info*`, `hmn ps` cannot list its
@@ -128,9 +127,7 @@ fn hmn_under_denied_process_info(args: &[&str]) -> Option<(Option<i32>, String, 
 #[test]
 #[ignore = "requires a usable Metal device and an unsandboxed parent (it applies a Seatbelt profile with /usr/bin/sandbox-exec)"]
 fn ps_exits_2_with_the_skip_line_when_process_info_is_denied() {
-    let Some((code, stdout, stderr)) = hmn_under_denied_process_info(&["ps"]) else {
-        return;
-    };
+    let (code, stdout, stderr) = hmn_under_denied_process_info(&["ps"]);
     assert_eq!(code, Some(2), "stderr: {stderr}");
     assert!(skipped_device_line(&stderr), "stderr: {stderr}");
     assert!(
@@ -145,10 +142,7 @@ fn ps_exits_2_with_the_skip_line_when_process_info_is_denied() {
         "stderr: {stderr}"
     );
 
-    let Some((code, _stdout, stderr)) =
-        hmn_under_denied_process_info(&["ps", "--pid", "4294967295", "--exit-status"])
-    else {
-        return;
-    };
+    let (code, _stdout, stderr) =
+        hmn_under_denied_process_info(&["ps", "--pid", "4294967295", "--exit-status"]);
     assert_eq!(code, Some(2), "stderr: {stderr}");
 }
