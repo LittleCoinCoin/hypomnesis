@@ -13,7 +13,8 @@ use hypomnesis::spill::DEFAULT_SHARED_GROWTH_BYTES;
 use hypomnesis::{GpuProcessEntry, device_count, device_info, gpu_processes, snapshot_is_spilling};
 
 use crate::format::{
-    Table, format_vram, format_vram_precise, json_string_or_null, json_value_or_null, spill_cell,
+    REMEDY_OUTSIDE_SANDBOX, RemedyPurpose, Table, format_vram, format_vram_precise,
+    json_string_or_null, json_value_or_null, remedy_text, spill_cell,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -39,9 +40,10 @@ pub struct PsRow {
     /// this row's device, computed once per device and broadcast to
     /// every row on it — same "adapter-wide, same value on every row"
     /// shape `hmn watch`'s `spilling` field already uses. `None` when
-    /// not measurable (non-Windows, pre-`WDDM 2.0`, non-NVIDIA adapter,
-    /// or a live `PDH` sample failure) — never collapsed into
-    /// `Some(false)`.
+    /// not measurable — on Linux and macOS, where spill cannot exist (the
+    /// SPILL cell reads `n/a`), and on Windows pre-`WDDM 2.0`, on a
+    /// non-NVIDIA adapter, or on a live `PDH` sample failure (the cell
+    /// reads `?`) — never collapsed into `Some(false)`.
     pub spilling: Option<bool>,
     /// Whether this process is being *paged* — its device is spilling
     /// and its own SHARED is at least [`DEFAULT_SHARED_GROWTH_BYTES`],
@@ -336,6 +338,53 @@ pub fn matches_any(name: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| name.contains(&p.to_lowercase()))
 }
 
+/// Whether `hmn ps` failed outright: at least one device was tried and
+/// none of them answered. `tried == 0` (no device to try, because
+/// `device_count()` failed) is not a failure, and one failed device
+/// among several that answered is a skip, not a failure.
+#[must_use]
+const fn every_device_failed(tried: usize, failed: usize) -> bool {
+    tried > 0 && failed >= tried
+}
+
+/// The stderr line for a device whose query failed:
+/// `hmn: ps failed to query device <index>: <err>`, with ` (skipped)`
+/// appended when `skipped` (no `--device`, so the listing carries on
+/// without it). Both forms share one prefix; the suffix alone tells a
+/// skipped device from a fatal `--device` failure.
+#[must_use]
+pub fn device_query_failure_line(
+    index: u32,
+    err: &impl std::fmt::Display,
+    skipped: bool,
+) -> String {
+    if skipped {
+        format!("hmn: ps failed to query device {index}: {err} (skipped)")
+    } else {
+        format!("hmn: ps failed to query device {index}: {err}")
+    }
+}
+
+/// The closing stderr line when every device `hmn ps` tried failed, so
+/// its exit `2` always has a stated reason.
+const ALL_DEVICES_FAILED_LINE: &str =
+    "hmn: ps: no device could be queried, so nothing could be listed";
+
+/// The exit code of a listing that reached the end of `run_ps`: `0`
+/// without `exit_status` or when rows are listed; with it and nothing
+/// listed, `1` when every tried device answered, `2` when one of them
+/// (`failed > 0`) did not — the process may sit on the skipped device.
+#[must_use]
+const fn ps_exit_code(exit_status: bool, rows_empty: bool, failed: usize) -> u8 {
+    if !exit_status || !rows_empty {
+        0
+    } else if failed > 0 {
+        2
+    } else {
+        1
+    }
+}
+
 /// Run the `ps` subcommand: collect process rows for the selected
 /// device(s) — sampling one live adapter-wide spill check per device
 /// along the way (see [`snapshot_is_spilling`]) — apply `filters`, sort
@@ -343,14 +392,25 @@ pub fn matches_any(name: &str, patterns: &[String]) -> bool {
 ///
 /// Returns the exit code, bypassing `main`'s `Ok`/`Err` fold like
 /// `run_fits` and `run_watch`: `0` normally; `1` under `exit_status`
-/// (`--exit-status`) when no process is listed, so `hmn ps --filter
-/// canvas --exit-status` is a one-line "is my job on the GPU?" gate, as
-/// `pgrep` is for processes; `2` when a device named by
-/// `--device` cannot be listed — out of range (`device index 3 out of
-/// range (have 1 devices)`, the library's own bounds check) or failing
-/// outright. Without `--device`, a device that fails is skipped so one
-/// broken device does not kill the whole listing; with it, the user asked
-/// for that device alone, and an empty table would read as an idle card.
+/// (`--exit-status`) when no process is listed and every device tried
+/// answered, so `hmn ps --filter canvas --exit-status` is a one-line "is
+/// my job on the GPU?" gate, as `pgrep` is for processes; `2` when a
+/// device named by `--device` cannot be listed — out of range (`device
+/// index 3 out of range (have 1 devices)`, the library's own bounds
+/// check) or failing outright. With `--device`, the user asked for that
+/// device alone, and an empty table would read as an idle card.
+///
+/// Without `--device`, a device that fails is skipped with a stderr line
+/// ending ` (skipped)` (`device_query_failure_line`), so one broken
+/// device does not kill the whole listing.
+/// When every device failed (at least one tried, none answering), `run_ps`
+/// prints `ALL_DEVICES_FAILED_LINE` and exits `2` with nothing on
+/// stdout: `--json` prints nothing on that exit, not `[]`, since a table
+/// or `[]` would read as "idle". Under `exit_status`, an empty listing
+/// that skipped a failed device exits `2`, not `1` (`ps_exit_code`):
+/// `1` means "queried, nothing matched", and the job may sit on the
+/// skipped device. With no device to try at all (`device_count()`
+/// failed), nothing was skipped, and the listing exits as before.
 pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool) -> ExitCode {
     // device_count returning Err here means no enumeration backend is
     // enabled / every backend failed; treat as zero NVIDIA devices and
@@ -365,6 +425,10 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     // Processes `--filter` could not judge (no resolvable name), and the
     // spilling devices — what the summary line reports beyond the rows.
     let mut notes = SummaryNotes::default();
+    // Devices whose query was attempted, and the ones that failed: every
+    // tried device failing is an exit `2`, not an empty listing.
+    let mut tried: usize = 0;
+    let mut failed: usize = 0;
     for &idx in &device_indices {
         // Look up the device once: its name for the DEVICE column, its
         // free VRAM for a spilling device's summary clause. Failure here
@@ -376,8 +440,9 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         // One live spill sample per device (not per row): `snapshot_is_spilling`
         // is adapter-wide, so every row on this device gets the same
         // value — the same "broadcast" shape `hmn watch`'s `spilling`
-        // field already uses. `None` (not measurable) on non-Windows,
-        // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup.
+        // field already uses. `None` (not measurable) on Linux and macOS,
+        // where spill cannot exist (the cell reads n/a), and on Windows
+        // pre-WDDM-2.0, a non-NVIDIA adapter, or a PDH hiccup (it reads ?).
         //
         // Sampled *before* gpu_processes(idx), not after: the SHARED
         // column on each row and the SPILL verdict broadcast onto it
@@ -394,13 +459,18 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         // gpu_processes()'s own call duration, the same call-ordering
         // discipline `hmn watch`'s wall_clock/t_ms pairing uses.
         let spilling = snapshot_is_spilling(idx);
+        tried += 1;
         let entries = match gpu_processes(idx) {
             Ok(entries) => entries,
             Err(e) if filters.device.is_some() => {
-                eprintln!("hmn: ps failed to query device {idx}: {e}");
+                eprintln!("{}", device_query_failure_line(idx, &e, false));
                 return ExitCode::from(2);
             }
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("{}", device_query_failure_line(idx, &e, true));
+                failed += 1;
+                continue;
+            }
         };
         // Over every process on the device, before any filter: a row's
         // share of the device's shared bytes, and the device's summary
@@ -446,6 +516,14 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
         }
     }
 
+    // Nothing on stdout, as on the `--device` failure path: a table or
+    // `[]` after "no device could be queried" reads as "idle" to a script
+    // that checks stdout alone.
+    if every_device_failed(tried, failed) {
+        eprintln!("{ALL_DEVICES_FAILED_LINE}");
+        return ExitCode::from(2);
+    }
+
     // Human-facing display order, per `--sort` (default: VRAM descending
     // so the biggest consumers land at the top — the row a user asking
     // "what's eating my GPU memory?" wants to see first). Tie-breaks
@@ -464,22 +542,20 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
     // Human-readable summary on stderr — preserves stdout's scriptability
     // (header-only table or `[]` for empty) while giving interactive
     // users an unambiguous "command worked, here's the count" line.
-    // Always printed, even when rows is non-empty, so the message is a
-    // consistent confirmation rather than an error indicator. Redirect
-    // 2>/dev/null to suppress.
+    // Printed for every listing that reaches here, even when rows is
+    // non-empty, so the message is a consistent confirmation rather than
+    // an error indicator. Redirect 2>/dev/null to suppress.
     eprintln!("hmn: {}", format_ps_summary(&rows, filters, &notes));
-    if exit_status && rows.is_empty() {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    ExitCode::from(ps_exit_code(exit_status, rows.is_empty(), failed))
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
 /// `<N> GPU process[es] found[ matching <filters>][ (<parts>)][; device <D> spilling: [<F> free, ]<S> shared, <P> process[es] paged]….`,
 /// where `<parts>` joins, with `; `, whichever of `<X.Y> <unit> committed
-/// total`, `<M> protected — re-run elevated for names` and `<K> unnamed not
-/// matched` apply.
+/// total`, `<M> protected — <remedy>` and `<K> unnamed not matched` apply,
+/// where `<remedy>` is `re-run elevated for names` (Windows, Linux) or
+/// `re-run outside the sandbox` (macOS, `outside_sandbox == true`), as
+/// [`remedy_text`] words it for [`RemedyPurpose::Names`].
 ///
 /// Three appendices after the noun, each elided when not applicable:
 ///
@@ -503,11 +579,13 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 ///
 ///   When at least one row is genuinely unresolvable, the parenthetical
 ///   carries a **protected continuation**
-///   (`; M protected — re-run elevated for names`) joined by `; `. A row
+///   (`; M protected — re-run elevated for names` on Windows and Linux,
+///   `; M protected — re-run outside the sandbox` on macOS, where
+///   `outside_sandbox == true`) joined by `; `. A row
 ///   counts as protected when `name.is_none()` (`NVML`'s
-///   `/proc/<pid>/comm` unreadable on Linux; macOS cross-user PIDs whose
-///   `ledger` syscall returned `EPERM` — `sudo hmn ps` is the equivalent
-///   elevation there); when `name` is exactly `Some("[protected]")` (the
+///   `/proc/<pid>/comm` unreadable on Linux; on macOS when the sandbox
+///   withheld `proc_pidpath` — see README Limitations, item 9);
+///   when `name` is exactly `Some("[protected]")` (the
 ///   Windows-only bracket meaning the `Toolhelp32Snapshot` fallback could
 ///   not be taken at all — see `hypomnesis::gpu_processes`'s Windows
 ///   path); or when `name` is the literal `Some("?")` string the
@@ -545,7 +623,12 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 /// "compute process" / "compute processes") because on the `PDH`
 /// Windows path the list includes every GPU memory holder
 /// (compositor, browsers, games, compute), not just `CUDA` contexts.
-fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) -> String {
+fn format_ps_summary_with(
+    rows: &[PsRow],
+    filters: &PsFilters,
+    notes: &SummaryNotes,
+    outside_sandbox: bool,
+) -> String {
     let count = rows.len();
     let protected = rows
         .iter()
@@ -583,7 +666,10 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) 
         parts.push(format!("{} committed total", format_vram(committed_total)));
     }
     if protected > 0 {
-        parts.push(format!("{protected} protected — re-run elevated for names"));
+        parts.push(format!(
+            "{protected} protected — {}",
+            remedy_text(outside_sandbox, RemedyPurpose::Names)
+        ));
     }
     if notes.unnamed > 0 {
         parts.push(format!("{} unnamed not matched", notes.unnamed));
@@ -610,6 +696,11 @@ fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) 
 
     out.push('.');
     out
+}
+
+/// [`format_ps_summary_with`] with this platform's remedy, [`REMEDY_OUTSIDE_SANDBOX`].
+fn format_ps_summary(rows: &[PsRow], filters: &PsFilters, notes: &SummaryNotes) -> String {
+    format_ps_summary_with(rows, filters, notes, REMEDY_OUTSIDE_SANDBOX)
 }
 
 /// Format `ps` rows as a fixed-column text table. Always prints the
@@ -807,6 +898,61 @@ mod tests {
         assert!(!matches_any("dwm.exe", &pats));
     }
 
+    // --- failed and skipped devices ---
+
+    #[test]
+    fn every_device_failed_needs_a_device_tried_and_none_answering() {
+        for ((tried, failed), want) in [
+            ((0, 0), false),
+            ((1, 0), false),
+            ((1, 1), true),
+            ((2, 1), false),
+            ((2, 2), true),
+        ] {
+            assert_eq!(
+                every_device_failed(tried, failed),
+                want,
+                "(tried, failed) = ({tried}, {failed})"
+            );
+        }
+    }
+
+    #[test]
+    fn device_query_failure_line_for_a_named_device_is_unchanged() {
+        assert_eq!(
+            device_query_failure_line(3, &"boom", false),
+            "hmn: ps failed to query device 3: boom"
+        );
+    }
+
+    #[test]
+    fn device_query_failure_line_for_a_skipped_device_ends_with_skipped() {
+        assert_eq!(
+            device_query_failure_line(3, &"boom", true),
+            "hmn: ps failed to query device 3: boom (skipped)"
+        );
+    }
+
+    #[test]
+    fn ps_exit_code_table_pins_the_exit_status_rule() {
+        for ((exit_status, rows_empty, failed), want) in [
+            ((false, false, 0), 0),
+            ((false, true, 0), 0),
+            ((false, true, 1), 0),
+            ((true, false, 0), 0),
+            ((true, false, 1), 0),
+            ((true, true, 0), 1),
+            ((true, true, 1), 2),
+            ((true, true, 2), 2),
+        ] {
+            assert_eq!(
+                ps_exit_code(exit_status, rows_empty, failed),
+                want,
+                "(exit_status, rows_empty, failed) = ({exit_status}, {rows_empty}, {failed})"
+            );
+        }
+    }
+
     // --- resolved_name (PID-reuse comparison filter) ---
 
     #[test]
@@ -903,6 +1049,15 @@ mod tests {
 
     // --- format_ps_table ---
 
+    // The SPILL cell of a row whose spill was not read (`spilling: None`):
+    // `?` on Windows, where spill exists; `n/a` elsewhere, where it cannot.
+    // Padded to three characters, so each table literal below holds one
+    // interpolation and the rest of the cell's padding.
+    #[cfg(windows)]
+    const UNKNOWN_SPILL: &str = "?  ";
+    #[cfg(not(windows))]
+    const UNKNOWN_SPILL: &str = "n/a";
+
     #[test]
     fn format_ps_table_empty_prints_header_only() {
         let s = format_ps_table(&[]);
@@ -920,8 +1075,10 @@ mod tests {
             Some("RTX 5060 Ti"),
         );
         let s = format_ps_table(&[r]);
-        let expected = "PID    NAME        VRAM     SHARED  DEVICE       SPILL\n\
-                        12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID    NAME        VRAM     SHARED  DEVICE       SPILL\n\
+             12345  python.exe  8.0 GiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -929,11 +1086,14 @@ mod tests {
     fn format_ps_table_protected_name_renders_question_mark() {
         // Column widths: PID=3 (header), NAME=4 (header), VRAM=7
         // ("256 MiB"), SHARED=6 (header), DEVICE=11 ("RTX 5060 Ti"),
-        // SPILL=5 (header — "?" is shorter). Two-space separators.
+        // SPILL=5 (header — "?" and "n/a" are shorter). Two-space
+        // separators. The NAME `?` is on every platform.
         let r = row(99, Some("?"), 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+             99   ?     256 MiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -943,8 +1103,10 @@ mod tests {
         // case — both go through the `unwrap_or("?")` path.
         let r = row(99, None, 268_435_456, 0, Some("RTX 5060 Ti"));
         let s = format_ps_table(&[r]);
-        let expected = "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
-                        99   ?     256 MiB  0 MiB   RTX 5060 Ti  ?    \n";
+        let expected = format!(
+            "PID  NAME  VRAM     SHARED  DEVICE       SPILL\n\
+             99   ?     256 MiB  0 MiB   RTX 5060 Ti  {UNKNOWN_SPILL}  \n"
+        );
         assert_eq!(s, expected);
     }
 
@@ -969,7 +1131,7 @@ mod tests {
         assert!(s.contains("a.exe  0 MiB  0 MiB   GPU 0   PAGED "));
         assert!(s.contains("b.exe  0 MiB  0 MiB   GPU 0   device"));
         assert!(s.contains("c.exe  0 MiB  0 MiB   GPU 0   no    "));
-        assert!(s.contains("d.exe  0 MiB  0 MiB   GPU 0   ?     "));
+        assert!(s.contains(&format!("d.exe  0 MiB  0 MiB   GPU 0   {UNKNOWN_SPILL}   ")));
     }
 
     #[test]
@@ -1365,7 +1527,12 @@ mod tests {
         let mut rows = unprotected_rows(3);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "4 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1375,7 +1542,12 @@ mod tests {
         let mut rows = unprotected_rows(28);
         rows.extend(protected_rows(4));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "32 GPU processes found (0 MiB committed total; 4 protected — re-run elevated for names)."
         );
     }
@@ -1384,7 +1556,12 @@ mod tests {
     fn format_ps_summary_all_protected() {
         let rows = protected_rows(3);
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 3 protected — re-run elevated for names)."
         );
     }
@@ -1408,10 +1585,11 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.extend(protected_rows(1));
         assert_eq!(
-            format_ps_summary(
+            format_ps_summary_with(
                 &rows,
                 &filters(&[42], Some(0), None),
-                &SummaryNotes::default()
+                &SummaryNotes::default(),
+                false
             ),
             "3 GPU processes found matching pid=42 device=0 (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
@@ -1426,7 +1604,12 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3000, Some("[protected]"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
         );
     }
@@ -1443,8 +1626,69 @@ mod tests {
         let mut rows = unprotected_rows(2);
         rows.push(row(3002, Some("?"), 0, 0, None));
         assert_eq!(
-            format_ps_summary(&rows, &filters(&[], None, None), &SummaryNotes::default()),
+            format_ps_summary_with(
+                &rows,
+                &filters(&[], None, None),
+                &SummaryNotes::default(),
+                false
+            ),
             "3 GPU processes found (0 MiB committed total; 1 protected — re-run elevated for names)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_outside_sandbox_says_the_macos_remedy() {
+        let mut rows = unprotected_rows(3);
+        rows.extend(protected_rows(1));
+        let s = format_ps_summary_with(
+            &rows,
+            &filters(&[], None, None),
+            &SummaryNotes::default(),
+            true,
+        );
+        assert_eq!(
+            s,
+            "4 GPU processes found (0 MiB committed total; 1 protected — re-run outside the sandbox)."
+        );
+    }
+
+    #[test]
+    fn format_ps_summary_with_outside_sandbox_leaves_other_summaries_alone() {
+        let rows = unprotected_rows(2);
+        let f = filters(&[42], Some(0), None);
+        let outside = format_ps_summary_with(&rows, &f, &unnamed(3), true);
+        let elevated = format_ps_summary_with(&rows, &f, &unnamed(3), false);
+        assert_eq!(outside, elevated);
+        assert_eq!(
+            outside,
+            "2 GPU processes found matching pid=42 device=0 (0 MiB committed total; 3 unnamed not matched)."
+        );
+    }
+
+    // These two twins are what pins `REMEDY_OUTSIDE_SANDBOX` per platform.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn format_ps_summary_on_macos_says_re_run_outside_the_sandbox() {
+        assert_eq!(
+            format_ps_summary(
+                &protected_rows(2),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
+            "2 GPU processes found (0 MiB committed total; 2 protected — re-run outside the sandbox)."
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn format_ps_summary_off_macos_says_re_run_elevated() {
+        assert_eq!(
+            format_ps_summary(
+                &protected_rows(2),
+                &filters(&[], None, None),
+                &SummaryNotes::default()
+            ),
+            "2 GPU processes found (0 MiB committed total; 2 protected — re-run elevated for names)."
         );
     }
 

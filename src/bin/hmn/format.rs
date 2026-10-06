@@ -81,20 +81,114 @@ pub fn device_name_suffix(name: Option<&str>) -> String {
 /// and whether this process is being paged (`paged`, `ps::paged_verdict`):
 /// `PAGED` when the device is spilling and this process is paged,
 /// `device` when the device is spilling but this process is not paged,
-/// `no` when the device is not spilling, and `?` when spill is not
-/// measurable. `?` rather than `no` for `None` is the v0.2.11 honesty
-/// contract — the same "can't tell" glyph used for unresolved process
-/// names — so an operator never mistakes "not measurable here" for
-/// "measured, not spilling". Shared by `hmn ps`'s table and `hmn watch`'s
-/// rows so the two surfaces cannot render the contract differently.
+/// `no` when the device is not spilling, and, when the verdict is `None`,
+/// `n/a` on Linux and macOS, where spill cannot exist (no shared-residency
+/// counter), or `?` on Windows, where spill exists but cannot be read now
+/// (pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, or a build
+/// without the `pdh` feature). Never `no` for `None`: the v0.2.11 honesty
+/// contract, so an operator never mistakes "not measurable here" for
+/// "measured, not spilling". The platform is [`SPILL_CANNOT_EXIST`], fixed
+/// at compile time ([`spill_cell_for`] is the testable core). Shared by
+/// `hmn ps`'s table and `hmn watch`'s rows so the two surfaces cannot
+/// render the contract differently.
 #[must_use]
 pub const fn spill_cell(spilling: Option<bool>, paged: Option<bool>) -> &'static str {
+    spill_cell_for(spilling, paged, SPILL_CANNOT_EXIST)
+}
+
+/// Whether this build's platform has no spill to measure: `true` on Linux
+/// and macOS, which have no shared-residency counter, `false` on Windows,
+/// where spill exists even when it cannot be read now. A compile-time
+/// fact, never the runtime `PDH` probe, which also folds pre-`WDDM 2.0`
+/// and a `PDH` hiccup into "not measurable".
+pub const SPILL_CANNOT_EXIST: bool = !cfg!(windows);
+
+/// The pure core of [`spill_cell`], with the platform passed in as
+/// `spill_cannot_exist` so tests exercise both platforms on any OS.
+/// `PAGED`, `device` and `no` do not depend on the flag; `None` renders as
+/// the unknown glyph, `n/a` where spill cannot exist and `?` otherwise.
+#[must_use]
+pub const fn spill_cell_for(
+    spilling: Option<bool>,
+    paged: Option<bool>,
+    spill_cannot_exist: bool,
+) -> &'static str {
     match (spilling, paged) {
         (Some(true), Some(true)) => "PAGED",
         (Some(true), _) => "device",
         (Some(false), _) => "no",
-        (None, _) => "?",
+        (None, _) => unknown_cell(spill_cannot_exist),
     }
+}
+
+/// `hmn watch`'s per-PID `PAGED` cell: `yes`, `no`, or the platform's
+/// unknown glyph for `None` (see [`paged_cell_for`]).
+#[must_use]
+pub const fn paged_cell(paged: Option<bool>) -> &'static str {
+    paged_cell_for(paged, SPILL_CANNOT_EXIST)
+}
+
+/// The pure core of [`paged_cell`], with the platform passed in as
+/// `spill_cannot_exist`: `yes` for `Some(true)`, `no` for `Some(false)`,
+/// and for `None` `n/a` where spill cannot exist and `?` otherwise.
+#[must_use]
+pub const fn paged_cell_for(paged: Option<bool>, spill_cannot_exist: bool) -> &'static str {
+    match paged {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => unknown_cell(spill_cannot_exist),
+    }
+}
+
+/// The glyph of a SPILL or `PAGED` cell whose verdict is `None`: `n/a`
+/// where spill cannot exist, `?` where it exists but cannot be read now.
+/// Never `no`. One place, so the two cells cannot diverge.
+const fn unknown_cell(spill_cannot_exist: bool) -> &'static str {
+    if spill_cannot_exist { "n/a" } else { "?" }
+}
+
+/// Whether this build's remedy for an unresolved process is "re-run
+/// outside the sandbox" (macOS) rather than "re-run elevated" (Windows,
+/// Linux). Selected at compile time because the reason is a platform
+/// fact, not a runtime one: on macOS only a sandbox withholds another
+/// process's name and bytes from `hmn`, and elevation does not lift a
+/// sandbox, so advising it there is wrong on every run. A `bool` rather
+/// than a hidden branch, so callers pass it to [`remedy_text`] and tests
+/// pin both texts on any OS.
+pub const REMEDY_OUTSIDE_SANDBOX: bool = cfg!(target_os = "macos");
+
+/// What a remedy clause asks the user to re-run `hmn` for; [`remedy_text`]
+/// words it.
+///
+/// Binary-internal dispatch enum, not a library type — matched
+/// exhaustively by [`remedy_text`], the sole place that interprets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemedyPurpose {
+    /// The names of protected rows, on `hmn ps`'s summary line
+    /// (`for names`).
+    Names,
+    /// An unresolved PID whose memory grew, in `hmn watch`'s growth hint
+    /// (`to identify`).
+    Identify,
+}
+
+/// The remedy clause `hmn ps` and `hmn watch` print for a process they
+/// could not resolve: `re-run elevated` when `outside_sandbox` is false
+/// and `re-run outside the sandbox` when it is true, followed by the
+/// words of `purpose` (`for names`, `to identify`), with one exception.
+/// On macOS the purpose `RemedyPurpose::Names` yields the bare `re-run outside the sandbox`.
+/// Pure, so both platform texts are tested on any OS, the way
+/// [`spill_cell`] is; production callers pass [`REMEDY_OUTSIDE_SANDBOX`].
+#[must_use]
+pub fn remedy_text(outside_sandbox: bool, purpose: RemedyPurpose) -> String {
+    let text = match (outside_sandbox, purpose) {
+        (false, RemedyPurpose::Names) => "re-run elevated for names",
+        (false, RemedyPurpose::Identify) => "re-run elevated to identify",
+        (true, RemedyPurpose::Names) => "re-run outside the sandbox",
+        (true, RemedyPurpose::Identify) => "re-run outside the sandbox to identify",
+    };
+    // BORROW: explicit to_owned — the caller owns the remedy text.
+    text.to_owned()
 }
 
 /// Compute the width of a table column as `max(header.len(),
@@ -543,16 +637,79 @@ mod tests {
         assert_eq!(bytes_to_mib(16_384 * 1_048_576), 16_384);
     }
 
-    // --- column_width ---
+    // --- spill and PAGED cells ---
 
     #[test]
-    fn spill_cell_renders_the_honesty_contract() {
-        assert_eq!(spill_cell(Some(true), Some(true)), "PAGED");
-        assert_eq!(spill_cell(Some(true), Some(false)), "device");
-        assert_eq!(spill_cell(Some(false), Some(false)), "no");
-        // "can't tell" must never render as "measured, not spilling".
-        assert_eq!(spill_cell(None, None), "?");
+    fn spill_cell_for_renders_n_a_where_spill_cannot_exist() {
+        // The unknown glyph follows the platform flag...
+        assert_eq!(spill_cell_for(None, None, true), "n/a");
+        assert_eq!(spill_cell_for(None, None, false), "?");
+        // ...and the measured verdicts do not depend on it.
+        for flag in [true, false] {
+            assert_eq!(spill_cell_for(Some(true), Some(true), flag), "PAGED");
+            assert_eq!(spill_cell_for(Some(true), Some(false), flag), "device");
+            assert_eq!(spill_cell_for(Some(false), Some(false), flag), "no");
+        }
     }
+
+    #[test]
+    fn paged_cell_for_renders_n_a_where_spill_cannot_exist() {
+        assert_eq!(paged_cell_for(None, true), "n/a");
+        assert_eq!(paged_cell_for(None, false), "?");
+        for flag in [true, false] {
+            assert_eq!(paged_cell_for(Some(true), flag), "yes");
+            assert_eq!(paged_cell_for(Some(false), flag), "no");
+        }
+    }
+
+    #[test]
+    fn spill_cell_wrapper_follows_the_compile_time_platform() {
+        // Literal per-platform expectations, not computed from
+        // SPILL_CANNOT_EXIST (that would be circular). "Can't tell" never
+        // renders as "measured, not spilling" on either platform.
+        #[cfg(windows)]
+        {
+            assert_eq!(spill_cell(None, None), "?");
+            assert_eq!(paged_cell(None), "?");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(spill_cell(None, None), "n/a");
+            assert_eq!(paged_cell(None), "n/a");
+        }
+    }
+
+    // --- remedy_text ---
+
+    #[test]
+    fn remedy_text_outside_sandbox_keeps_to_identify() {
+        assert_eq!(
+            remedy_text(true, RemedyPurpose::Identify),
+            "re-run outside the sandbox to identify"
+        );
+    }
+
+    #[test]
+    fn remedy_text_elevated_keeps_the_v0_2_13_wording() {
+        assert_eq!(
+            remedy_text(false, RemedyPurpose::Names),
+            "re-run elevated for names"
+        );
+        assert_eq!(
+            remedy_text(false, RemedyPurpose::Identify),
+            "re-run elevated to identify"
+        );
+    }
+
+    #[test]
+    fn remedy_outside_sandbox_for_names_is_the_bare_macos_remedy() {
+        assert_eq!(
+            remedy_text(true, RemedyPurpose::Names),
+            "re-run outside the sandbox"
+        );
+    }
+
+    // --- column_width ---
 
     #[test]
     fn table_min_widths_pad_narrow_columns_but_never_truncate() {

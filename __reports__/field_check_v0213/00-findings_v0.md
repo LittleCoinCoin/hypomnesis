@@ -109,7 +109,7 @@ EPERM. On this OS that case does not happen.
 ## Pointers
 
 - Issue: https://github.com/mi-for-the-rust-of-us/hypomnesis/issues/3
-- Dogfooding write-up: [dogfooding-macos-cross-user-ledger-and-device-bounds.md](../../docs/dogfooding-feedbacks/dogfooding-macos-cross-user-ledger-and-device-bounds.md)
+- Dogfooding write-up: [dogfooding-macos-sandbox-eperm-and-device-bounds.md](../../docs/dogfooding-feedbacks/dogfooding-macos-sandbox-eperm-and-device-bounds.md)
 - Evidence, check 1: [evidence/check1_tests.md](evidence/check1_tests.md)
 - Evidence, checks 2–8: [evidence/checks2_8_cli.md](evidence/checks2_8_cli.md)
 - Verification: [evidence/verify_cli.md](evidence/verify_cli.md); probes in [evidence/probes/](evidence/probes/) (`p.py` proc_pidpath, `l.py` ledger scan, `rs/` crate-API probe)

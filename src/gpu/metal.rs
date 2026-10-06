@@ -2,13 +2,15 @@
 
 //! macOS GPU backend — per-process Metal memory on Apple Silicon UMA.
 //!
-//! Reads `graphics_footprint` from the BSD kernel ledger for any
-//! same-user PID via `ledger(LEDGER_ENTRY_INFO_V2, pid, …)`. On a
+//! Reads `graphics_footprint` from the BSD kernel ledger for any PID
+//! the caller's sandbox lets it read, via
+//! `ledger(LEDGER_ENTRY_INFO_V2, pid, …)`. On a
 //! unified-memory-architecture (`UMA`) Apple Silicon `SoC` the GPU and
 //! CPU share the same physical pages, so device-wide `total_bytes` is
 //! `sysctl hw.memsize` and the adapter name is the CPU brand string
-//! (`machdep.cpu.brand_string`). Cross-user PIDs require root; their
-//! ledger reads return `EPERM` and are skipped silently in enumeration.
+//! (`machdep.cpu.brand_string`). Process ownership plays no part: a ledger
+//! read refused by the caller's sandbox is skipped silently in
+//! enumeration (see README Limitations, item 9).
 //!
 //! Source map: `ledger` (per-process graphics resident bytes),
 //! `sysctlbyname` (device totals, name), `proc_listpids` +
@@ -31,19 +33,27 @@
 use core::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 
+use super::kinfo::{
+    CTL_KERN, KERN_PROC, KERN_PROC_PID, KINFO_PROC_SIZE, PathLookup, PidLookup,
+    classify_kern_proc_pid, decide_exists,
+};
+
 /// libSystem FFI declarations for the macOS GPU backend.
 ///
-/// Every entry below is a stable libSystem syscall available on every
-/// macOS install since at least 10.15. No header from
+/// Every entry below (`getpid`, `ledger`, `sysctl`, `sysctlbyname`,
+/// `proc_listpids`, `proc_pidpath`) is a stable libSystem syscall
+/// available on every macOS install since at least 10.15. No header from
 /// `Kernel.framework` is shipped in user space for `ledger()`, so the
 /// signature is declared inline against the kernel's documented ABI.
 mod libsystem_ffi {
-    use core::ffi::{c_char, c_void};
+    use core::ffi::{c_char, c_int, c_void};
 
     // SAFETY: These are stable libSystem entry points with documented
-    // C ABI. `getpid` and `sysctlbyname` are POSIX. `proc_listpids` and
-    // `proc_pidpath` are declared in `<libproc.h>`. `ledger` has no
-    // user-space header but its ABI is fixed (`SYS_ledger = 373`).
+    // C ABI. `getpid` is POSIX. `sysctl` and `sysctlbyname` are BSD,
+    // declared in `<sys/sysctl.h>`. `proc_listpids` and `proc_pidpath`
+    // are declared in `<libproc.h>`.
+    // `ledger` has no user-space header but its ABI is fixed
+    // (`SYS_ledger = 373`).
     // Each call's safety contract is upheld at its call site.
     #[allow(unsafe_code)]
     unsafe extern "C" {
@@ -65,7 +75,7 @@ mod libsystem_ffi {
         /// arg1 is the target PID reinterpreted as a pointer-sized
         /// integer (kernel convention — see `osfmk/kern/ledger.c`).
         /// Returns `0` on success, `-1` with `errno` set on failure
-        /// (e.g. `EPERM` for cross-user reads).
+        /// (e.g. `EPERM` for a read refused by the caller's sandbox).
         pub(super) unsafe fn ledger(
             cmd: i32,
             arg1: *mut c_void,
@@ -80,6 +90,23 @@ mod libsystem_ffi {
         /// `newp`/`newlen` are zero/null for read-only queries.
         pub(super) unsafe fn sysctlbyname(
             name: *const c_char,
+            oldp: *mut c_void,
+            oldlenp: *mut usize,
+            newp: *mut c_void,
+            newlen: usize,
+        ) -> i32;
+
+        /// `sysctl` — read a kernel state variable by MIB.
+        ///
+        /// See: `<sys/sysctl.h>`. The MIB form, distinct from
+        /// `sysctlbyname`: `name` points at `namelen` integers (for a
+        /// process record, `CTL_KERN, KERN_PROC, KERN_PROC_PID, pid`).
+        /// `oldp`/`oldlenp` form the standard in/out buffer pair;
+        /// `newp`/`newlen` are null/zero for read-only queries. Returns
+        /// `0` on success, `-1` with `errno` set on failure.
+        pub(super) unsafe fn sysctl(
+            name: *mut c_int,
+            namelen: u32,
             oldp: *mut c_void,
             oldlenp: *mut usize,
             newp: *mut c_void,
@@ -104,8 +131,8 @@ mod libsystem_ffi {
         ///
         /// See: `<libproc.h>`. Writes a NUL-terminated path into
         /// `buffer`. Returns the path length on success (excluding
-        /// NUL), or `0` on failure (e.g. process exited, permission
-        /// denied for cross-user PIDs).
+        /// NUL), or `0` on failure (e.g. process exited, or the call
+        /// refused by the caller's sandbox).
         pub(super) unsafe fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
     }
 }
@@ -143,11 +170,6 @@ const PROC_ALL_PIDS: u32 = 1;
 /// `PROC_PIDPATHINFO_MAXSIZE` — maximum path length returned by
 /// `proc_pidpath`. `4 * MAXPATHLEN` from `<sys/proc_info.h>`.
 const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
-
-/// `ESRCH` from `<errno.h>`: no process with this PID — how
-/// `proc_pidpath` says a PID names nothing, as opposed to a process it
-/// may not inspect (`EPERM`).
-const ESRCH: i32 = 3;
 
 /// `ledger_template_info` from XNU `osfmk/kern/ledger.h`.
 ///
@@ -199,7 +221,7 @@ struct LedgerEntryInfo {
 
 /// Combined result of a single Metal device-wide query.
 ///
-/// Shape mirrors [`super::dxgi::DxgiQueryResult`] in spirit: the device
+/// Shape mirrors `super::dxgi::DxgiQueryResult` in spirit: the device
 /// total, the device-wide working-set budget, and the adapter name.
 /// Unlike `DxgiQueryResult`, there is no per-process figure here — the
 /// per-process path is [`process_gpu_info`], which reads
@@ -451,8 +473,9 @@ fn resolve_graphics_footprint_index() -> Option<i32> {
 ///
 /// Calls `ledger(LEDGER_ENTRY_INFO_V2, pid, buf, &count)` and reads the
 /// `lei_balance` of the resolved entry index. Returns `None` if the
-/// syscall fails (e.g. cross-user PID without root → `EPERM`, or PID
-/// has exited → `ESRCH`), or the index has not yet been resolvable.
+/// syscall fails (e.g. a read refused by the caller's sandbox →
+/// `EPERM`, or PID has exited → `ESRCH`), or the index has not yet been
+/// resolvable.
 ///
 /// `graphics_footprint` tracks resident Metal-written pages on Apple
 /// Silicon UMA: writing every byte of a 256 MiB `MTLBuffer` increases
@@ -492,8 +515,8 @@ fn read_graphics_footprint(pid: i32) -> Option<u64> {
     #[allow(clippy::as_conversions, clippy::cast_sign_loss)]
     let pid_as_ptr = pid as usize as *mut c_void;
     // SAFETY: arg1 is the PID encoded as a pointer; arg2 is the
-    // entry-array buffer; arg3 is the count in/out. Cross-user PIDs
-    // surface as a non-zero return (errno = EPERM); PID-exited
+    // entry-array buffer; arg3 is the count in/out. A read refused by
+    // the caller's sandbox surfaces as a non-zero return; PID-exited
     // surfaces as ESRCH. Both are folded into `None` below.
     let rc = unsafe {
         libsystem_ffi::ledger(
@@ -607,10 +630,11 @@ pub(super) fn process_gpu_info(device_index: u32) -> Option<crate::ProcessGpuInf
     })
 }
 
-/// Enumerate every same-user process holding GPU memory on
-/// `device_index`. Cross-user PIDs (`EPERM` on the ledger read) are
-/// skipped silently, as are PIDs with a zero `graphics_footprint`
-/// balance (mirrors NVML's per-process filter on Linux).
+/// Enumerate every process holding GPU memory on `device_index` that
+/// the caller's sandbox lets it read. PIDs whose ledger read is refused
+/// by the caller's sandbox are skipped silently, as are PIDs with a
+/// zero `graphics_footprint` balance (mirrors NVML's per-process filter
+/// on Linux).
 ///
 /// Two-phase `proc_listpids`: query the buffer size first, then fill.
 /// PID count may grow between the two calls; the iteration is capped
@@ -680,8 +704,9 @@ pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::Gpu
             continue;
         }
         let Some(used) = read_graphics_footprint(pid) else {
-            // Cross-user EPERM, ESRCH (exited), or absent index —
-            // all surface as `None` here and are silently skipped.
+            // A read refused by the caller's sandbox, ESRCH (exited),
+            // or absent index — all surface as `None` here and are
+            // silently skipped.
             continue;
         };
         if used == 0 {
@@ -707,13 +732,23 @@ pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::Gpu
     Some(out)
 }
 
-/// Whether `pid` names a running process, via `proc_pidpath`: a path
-/// means yes, `ESRCH` means no, anything else (e.g. `EPERM`) is `None`,
-/// "can't tell". `None` too for a `pid` past `i32::MAX`, which no macOS
-/// PID reaches. Backs [`crate::gpu::process_exists`] on macOS.
-#[allow(unsafe_code)]
+/// Whether `pid` names a running process: `proc_pidpath` first (a path
+/// means yes), then, when it gives no path, `sysctl` `KERN_PROC_PID`
+/// (one record means yes, none means no). When `sysctl` is refused too,
+/// `proc_pidpath`'s `ESRCH` means no and anything else (e.g. `EPERM`) is
+/// `None`, "can't tell"; an unusable record is `None` as well. The rule
+/// is [`super::kinfo::decide_exists`]. `None` too for a `pid` past
+/// `i32::MAX`, which no macOS PID reaches. Backs
+/// [`crate::gpu::process_exists`] on macOS.
 pub(super) fn process_exists(pid: u32) -> Option<bool> {
     let pid = i32::try_from(pid).ok()?;
+    decide_exists(proc_pidpath_lookup(pid), || kern_proc_pid_lookup(pid))
+}
+
+/// What `proc_pidpath` says about `pid`: `Found` when it returns a path,
+/// else `Failed` with the `errno` it left.
+#[allow(unsafe_code)]
+fn proc_pidpath_lookup(pid: i32) -> PathLookup {
     let mut buf: [u8; PROC_PIDPATHINFO_MAXSIZE] = [0; PROC_PIDPATHINFO_MAXSIZE];
     // CAST: usize → u32, `PROC_PIDPATHINFO_MAXSIZE` is 4096; fits.
     #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
@@ -725,16 +760,63 @@ pub(super) fn process_exists(pid: u32) -> Option<bool> {
     let len =
         unsafe { libsystem_ffi::proc_pidpath(pid, buf.as_mut_ptr().cast::<c_void>(), cap_u32) };
     if len > 0 {
-        return Some(true);
+        PathLookup::Found
+    } else {
+        PathLookup::Failed {
+            errno: std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
+        }
     }
-    (std::io::Error::last_os_error().raw_os_error() == Some(ESRCH)).then_some(false)
+}
+
+/// The raw result of one `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID,
+/// pid)` call: `(rc, errno, buffer, len)`, with `errno` 0 when `rc` is.
+///
+/// A buffer of one record is enough for a PID query; a record that
+/// would not fit fails with `ENOMEM`, which classifies as `Unusable`
+/// ("can't tell"). Kept apart from [`kern_proc_pid_lookup`] so the live
+/// layout test can check the raw record.
+#[allow(unsafe_code)]
+fn kern_proc_pid_raw(pid: i32) -> (i32, i32, [u8; KINFO_PROC_SIZE], usize) {
+    let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid];
+    let mut buf = [0_u8; KINFO_PROC_SIZE];
+    let mut len = KINFO_PROC_SIZE;
+    // CAST: usize → u32, a 4-element MIB; fits.
+    #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let namelen = mib.len() as u32;
+    // SAFETY: `mib` holds the `namelen` ints; `buf` is valid for
+    // `len` bytes, and `len` is in/out (the kernel writes back how many
+    // bytes it stored, never more than it was given); `newp`/`newlen`
+    // are null/zero, a read-only query.
+    let rc = unsafe {
+        libsystem_ffi::sysctl(
+            mib.as_mut_ptr(),
+            namelen,
+            buf.as_mut_ptr().cast::<c_void>(),
+            &raw mut len,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    // Read `errno` before any other call can clobber it.
+    let errno = if rc == 0 {
+        0
+    } else {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    };
+    (rc, errno, buf, len)
+}
+
+/// What `sysctl` `KERN_PROC_PID` says about `pid`.
+fn kern_proc_pid_lookup(pid: i32) -> PidLookup {
+    let (rc, errno, buf, len) = kern_proc_pid_raw(pid);
+    classify_kern_proc_pid(rc, errno, &buf, len, pid)
 }
 
 /// Resolve `pid`'s executable basename via `proc_pidpath`.
 ///
-/// Returns `None` on syscall failure (process exited, cross-user
-/// permission denial, or path-decoding failure). The basename is the
-/// final `/`-separated component of the full executable path.
+/// Returns `None` on syscall failure (process exited, a call refused
+/// by the caller's sandbox, or path-decoding failure). The basename is
+/// the final `/`-separated component of the full executable path.
 #[allow(unsafe_code)]
 fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
     let mut buf: [u8; PROC_PIDPATHINFO_MAXSIZE] = [0; PROC_PIDPATHINFO_MAXSIZE];
@@ -744,8 +826,8 @@ fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
     // SAFETY: `buf.as_mut_ptr` is valid for `PROC_PIDPATHINFO_MAXSIZE`
     // bytes (its declared length). The kernel writes a NUL-terminated
     // path of at most `cap_u32` bytes and returns the length excluding
-    // the NUL. PID validity is handled by the kernel; a stale/cross-user
-    // PID returns 0.
+    // the NUL. PID validity is handled by the kernel; a stale PID, or
+    // one refused by the caller's sandbox, returns 0.
     let len =
         unsafe { libsystem_ffi::proc_pidpath(pid, buf.as_mut_ptr().cast::<c_void>(), cap_u32) };
     if len <= 0 {
@@ -768,5 +850,53 @@ fn read_proc_pidpath_basename(pid: i32) -> Option<String> {
         // BORROW: `to_owned` — `basename` is borrowed from `path_str`
         // which is dropped at function return.
         Some(basename.to_owned())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::gpu::kinfo::{self, parse_kinfo_records};
+    use std::os::unix::ffi::OsStrExt;
+
+    /// The first 16 bytes (`MAXCOMLEN`) of a path's file name.
+    fn comm_of(path: &std::path::Path) -> Vec<u8> {
+        // BORROW: `as_bytes` views the file name's bytes in place.
+        let name = path.file_name().unwrap().as_bytes();
+        // BORROW: `to_vec` copies the name out of `path`.
+        name.get(..name.len().min(kinfo::P_COMM_SIZE - 1))
+            .unwrap()
+            .to_vec()
+    }
+
+    /// Anchors the 648-byte layout on the running kernel: synthetic
+    /// buffers in `kinfo::tests` prove only that the parser agrees with
+    /// itself. Run natively and under Rosetta 2
+    /// (`--target x86_64-apple-darwin`).
+    #[test]
+    fn kern_proc_pid_record_matches_the_kernel_for_this_process() {
+        let me = std::process::id();
+        let (rc, errno, buf, len) = kern_proc_pid_raw(i32::try_from(me).unwrap());
+        assert_eq!(rc, 0, "KERN_PROC_PID refused, errno {errno}");
+        assert_eq!(len, 648);
+        let records = parse_kinfo_records(buf.get(..len).unwrap()).unwrap();
+        assert_eq!(records.len(), 1, "{records:?}");
+        let record = records.first().unwrap();
+        assert_eq!(u32::try_from(record.pid).ok(), Some(me));
+        // `p_comm` is the name `execve` was given: the executable's file
+        // name, or `argv[0]`'s basename.
+        let exe = comm_of(&std::env::current_exe().unwrap());
+        let argv0 = std::env::args_os()
+            .next()
+            .map(|a| comm_of(std::path::Path::new(&a)))
+            .unwrap_or_default();
+        assert!(
+            record.comm == exe || record.comm == argv0,
+            "comm {:?}, exe {:?}, argv[0] {:?}",
+            String::from_utf8_lossy(&record.comm),
+            String::from_utf8_lossy(&exe),
+            String::from_utf8_lossy(&argv0)
+        );
     }
 }

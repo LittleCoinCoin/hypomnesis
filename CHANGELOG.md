@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The SPILL and per-PID `PAGED` cells read `n/a` on Linux and macOS** (`src/bin/hmn/format.rs`,
+  `ps.rs`, `watch.rs`) — where spill cannot exist, `hmn ps`'s and `hmn watch`'s SPILL cell and
+  `hmn watch`'s closing per-PID `PAGED` cell now say `n/a` instead of `?`, which also means an
+  unresolved name in NAME. `?` stays on Windows, where spill exists but cannot be read now
+  (pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, a build without `pdh`). The platform is
+  decided at compile time through one core, `format::spill_cell_for`, that both cells share.
+  Text output only: `--json` keeps `null`. From the v0.2.13 macOS field check, finding F6
+  ([`__reports__/field_check_v0213/01-findings_v1.md`](__reports__/field_check_v0213/01-findings_v1.md)).
+
+- **On macOS, `hmn ps` and `hmn watch` advise `re-run outside the sandbox`, not elevation**
+  (`src/bin/hmn/format.rs`, `ps.rs`, `watch.rs`, `main.rs`) — the `hmn ps` summary's clause
+  now reads `N protected — re-run outside the sandbox` and `hmn watch`'s growth hint reads
+  `re-run outside the sandbox to identify`, where both advised an elevation that does not change
+  what a macOS sandbox withholds. One compile-time selection, `format::remedy_text`, picks the
+  text; the Windows and Linux text is unchanged, byte for byte. From the
+  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md).
+
+- **On macOS the sandbox, not process ownership, decides what `hmn` can read** (`README.md`,
+  `docs/FAQ.md`, `ROADMAP.md`, rustdoc, `hmn --help`) — unsandboxed, `hmn ps` lists every user's
+  processes with no elevation, so no macOS text advises `sudo`; README Limitations item 9 states
+  what a sandbox refuses and what `hmn ps` then prints.
+  From the [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md),
+  F1.
+
+### Fixed
+
+- **`hmn ps --device 1` on an Apple Silicon Mac says the index is out of range**
+  (`src/gpu/mod.rs`, `src/error.rs`) — it now prints `device index 1 out of range (have 1 devices)`,
+  where it printed the `NoGpuSource` text naming four backends macOS lacks: `bounds_check` had no
+  Metal arm, so `device_info`, `process_gpu_info` and `gpu_processes` fell through to
+  `NoGpuSource`. The answer also holds in a sandbox that denies `process-info*`, since the Metal
+  count comes from `sysctl`. On macOS the `NoGpuSource` text now names Metal, NVML and
+  `nvidia-smi`; on Windows and Linux it is unchanged. From the
+  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md), F2.
+
+- **`hmn ps` states each device it skipped, and exits `2` when every device failed**
+  (`src/bin/hmn/ps.rs`, `main.rs`) — without `--device`, a device whose query fails now prints
+  `hmn: ps failed to query device N: … (skipped)`, and when every device it tried failed,
+  `hmn ps` prints `hmn: ps: no device could be queried, so nothing could be listed` and exits
+  `2` with no table, where it printed an empty table and exited `0` on every platform (the
+  silent wrong answer `0 GPU processes found.`). `--json` prints nothing on that exit, not `[]`.
+  With `--exit-status`, an empty listing that skipped a failed device exits `2`, not `1`: `1`
+  means nothing matched on every device queried, and the job may sit on the skipped device. A
+  host with no device to try is unchanged.
+
+- **`process_exists(0)` on macOS answers `Some(true)`** (`src/gpu/metal.rs`, `src/gpu/kinfo.rs`,
+  new) — `kernel_task` has no executable path, so `proc_pidpath` says `ESRCH` and PID 0 read as
+  absent; `hmn watch 0` warned `names no running process`. When libproc gives no path,
+  `process_exists` now asks `sysctl` `KERN_PROC_PID`, which finds it, so `hmn watch 0` no longer
+  warns. A caller whose sandbox refuses libproc but allows `kern.proc` now gets `Some(true)` or
+  `Some(false)` where it got `None`; with both refused the answer is `None` unless `proc_pidpath`
+  said `ESRCH`, and a `kinfo_proc` record that does not fit `sysctl`'s buffer (`ENOMEM`) gives
+  `None`. The record is read by a private `kinfo_proc` parser with no `unsafe`; its 648-byte
+  layout (`p_pid` at 40, `p_comm` at 243) was verified on arm64 natively (Apple M3 Pro) and on
+  `x86_64` under Rosetta 2, by the SDK header and a live read of the test process; native Intel
+  hardware is untested. A zombie, exited but not yet reaped, now reads `Some(true)` (it read
+  `Some(false)`), as on Linux. Issue #3, item 2 of
+  [`docs/roadmap-v0.2.14.md`](docs/roadmap-v0.2.14.md).
+
 ## [0.2.13] - 2026-09-30
 
 Answers an askesis dogfooding report

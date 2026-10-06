@@ -43,6 +43,12 @@ mod proc_name;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal;
 
+// `kinfo_proc` records and the macOS `process_exists` lookup rule. Pure
+// byte parsing, so it also builds in every test build, where the Linux
+// and Windows CI jobs run its offset and length checks.
+#[cfg(any(all(target_os = "macos", feature = "metal"), test))]
+mod kinfo;
+
 /// Number of NVIDIA GPUs visible to `NVML` (`NVML`-canonical ordering).
 ///
 /// On Windows the count uses `NVML`; if `NVML` is unavailable, the
@@ -96,7 +102,7 @@ pub fn device_count() -> Result<u32> {
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `index` is past
-/// the device count reported by `NVML` or `DXGI`.
+/// the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if no backend can satisfy
 /// the query.
 #[allow(unused_variables)] // `index` unused when no GPU backend feature is enabled
@@ -200,7 +206,7 @@ pub fn device_info(index: u32) -> Result<GpuDeviceInfo> {
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`
-/// is past the device count reported by `NVML` or `DXGI`.
+/// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend fails.
 #[allow(unused_variables)] // `device_index` unused when no GPU backend feature is enabled
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled (body collapses)
@@ -366,15 +372,16 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`
-/// is past the device count reported by `NVML` or `DXGI`.
+/// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend
 /// fails (or no backend is enabled by features).
 #[allow(unused_variables)] // `device_index` unused when no GPU backend feature is enabled
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
 pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
     // Metal is the macOS primary source: per-PID ledger reads of
-    // `graphics_footprint` over `proc_listpids`. Same-user PIDs only;
-    // cross-user PIDs surface as EPERM and are silently skipped.
+    // `graphics_footprint` over `proc_listpids`: every process the
+    // caller's sandbox lets it read; a refused `proc_listpids` falls
+    // through to `NoGpuSource`.
     #[cfg(all(target_os = "macos", feature = "metal"))]
     if let Some(mut rows) = metal::list_compute_processes(device_index) {
         sort_by_pid(&mut rows);
@@ -469,12 +476,21 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// |---|---|---|
 /// | Linux | `/proc/<pid>/status`, whose `Tgid` must equal `pid` (so a thread ID is not taken for a process) | the file exists but cannot be read |
 /// | Windows (`pdh` feature) | a `Toolhelp32` process snapshot, the mechanism `gpu_processes` uses to name processes `OpenProcess` cannot (a process whose snapshot name is empty — none is known — would read as absent) | the snapshot cannot be taken |
-/// | macOS (`metal` feature) | `proc_pidpath`; `ESRCH` means no such process | `proc_pidpath` fails for another reason (e.g. `EPERM`), or `pid` exceeds `i32::MAX` |
+/// | macOS (`metal` feature) | `proc_pidpath`, then `sysctl` `KERN_PROC_PID` when libproc gives no path (`kernel_task` has none, and a sandbox can refuse libproc and still allow `sysctl`) | both are refused and `proc_pidpath` did not say `ESRCH`, or the `kinfo_proc` record does not fit `sysctl`'s buffer (`ENOMEM`), or `pid` exceeds `i32::MAX` |
 /// | anything else | — | always |
 ///
 /// On Linux a process hidden from the caller (a `/proc` mounted with
 /// `hidepid`) reads as `Some(false)`, indistinguishable from one that does
-/// not exist.
+/// not exist. On macOS a sandbox that answered `KERN_PROC_PID` with no
+/// record, rather than refusing it, would make a live PID read
+/// `Some(false)` the same way.
+///
+/// On macOS PID 0 (`kernel_task`) reads `Some(true)`: it has no executable
+/// path, so `proc_pidpath` says `ESRCH`, and `KERN_PROC_PID` finds it (since
+/// v0.2.14). When libproc and `kern.proc` are both refused, the answer is
+/// `None` unless `proc_pidpath` said `ESRCH`, which reads `Some(false)`.
+/// A zombie (exited, not yet reaped) reads `Some(true)` on macOS as on
+/// Linux: the kernel keeps its record until the parent reaps it.
 ///
 /// Added in v0.2.13 for `hmn watch`, which warns when a PID given on its
 /// command line names no process, rather than watching it silently as
@@ -590,9 +606,11 @@ fn resolve_unresolved_windows_names(entries: &mut [GpuProcessEntry]) {
 
 /// Bounds-check `index` against whatever count source is available.
 ///
-/// Tries `NVML` first; on Windows, falls back to `DXGI` if `NVML` is
-/// unavailable. Returns `Ok(())` when no count source is available
-/// (caller will surface its own error, typically `NoGpuSource`).
+/// On macOS, tries `Metal` first (the same order as [`device_count`],
+/// so the bound reported matches the count `hmn` shows). Then tries
+/// `NVML`; on Windows, falls back to `DXGI` if `NVML` is unavailable.
+/// Returns `Ok(())` when no count source is available (caller will
+/// surface its own error, typically `NoGpuSource`).
 ///
 /// # Errors
 ///
@@ -600,8 +618,17 @@ fn resolve_unresolved_windows_names(entries: &mut [GpuProcessEntry]) {
 /// source reports a count and `index >= count`.
 #[allow(unused_variables)] // unused when no backend feature is enabled
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
-#[allow(clippy::unnecessary_wraps)] // Result is necessary only when nvml or dxgi feature returns Err
+#[allow(clippy::unnecessary_wraps)] // Result is necessary only when metal, nvml or dxgi feature returns Err
 fn bounds_check(index: u32) -> Result<()> {
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    if let Some(count) = metal::device_count() {
+        return if index >= count {
+            Err(HypomnesisError::DeviceIndexOutOfRange { index, count })
+        } else {
+            Ok(())
+        };
+    }
+
     #[cfg(feature = "nvml")]
     if let Some(count) = nvml::device_count() {
         return if index >= count {
@@ -644,6 +671,8 @@ mod tests {
         }
         #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
         assert_eq!(process_exists(me), Some(true));
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        assert_eq!(process_exists(me), Some(true));
     }
 
     #[test]
@@ -655,5 +684,44 @@ mod tests {
         assert_ne!(process_exists(impossible), Some(true));
         #[cfg(any(target_os = "linux", all(windows, feature = "pdh")))]
         assert_eq!(process_exists(impossible), Some(false));
+        #[cfg(all(target_os = "macos", feature = "metal"))]
+        assert_eq!(process_exists(impossible), None);
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn process_exists_finds_kernel_task_on_macos() {
+        // PID 0 is `kernel_task`: it has no executable path, so
+        // `proc_pidpath` says `ESRCH`, and only `sysctl` `KERN_PROC_PID`
+        // finds it.
+        assert_eq!(process_exists(0), Some(true));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn process_exists_says_false_for_a_dead_pid_on_macos() {
+        // `i32::MAX`: a valid `pid_t` no process holds (macOS PIDs stop
+        // at 99999).
+        assert_eq!(process_exists(2_147_483_647), Some(false));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn bounds_check_metal_arm_admits_index_0_and_rejects_index_1() {
+        // Apple Silicon reports one Metal device; an Intel Mac (no count)
+        // skips. Unsandboxed, the dispatchers answer index 0 from Metal
+        // before `bounds_check` runs, so only this test sees its Metal arm.
+        let Some(1) = metal::device_count() else {
+            return;
+        };
+        assert!(bounds_check(0).is_ok(), "{:?}", bounds_check(0));
+        assert!(
+            matches!(
+                bounds_check(1),
+                Err(HypomnesisError::DeviceIndexOutOfRange { index: 1, count: 1 })
+            ),
+            "{:?}",
+            bounds_check(1)
+        );
     }
 }

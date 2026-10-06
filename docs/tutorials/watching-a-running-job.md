@@ -47,9 +47,9 @@ cargo install hypomnesis
 ```
 
 On Linux/macOS `hmn watch` still attaches and shows real per-PID `VRAM`
-deltas, but spill is not measurable there: the SPILL column shows `?`, and
-the closing summary says `spill not measurable on this platform` in place of
-the spill report (see the
+deltas, but spill is not measurable there: the SPILL column shows
+`n/a` on Linux and macOS, and the closing summary says
+`spill not measurable on this platform` in place of the spill report (see the
 [FAQ](../FAQ.md#why-is-everything-spill-related-0--false-on-linux-and-macos)).
 
 ## Step 1 — Attach
@@ -363,8 +363,9 @@ is a hard error (exit `2`).
 - **An unresolved watched PID that grows** — `None`/`?`, or (Windows-only,
   since v0.2.8) still `[protected]` after the `Toolhelp32Snapshot`
   fallback — committed or shared, by 256 MiB or more since attach, gets a
-  one-shot stderr hint (`re-run elevated to identify`), the same elevation
-  story as `hmn ps`'s unresolved rows (see the
+  one-shot stderr hint (`re-run elevated to identify` on Windows and Linux,
+  `re-run outside the sandbox to identify` on macOS), the same story as
+  `hmn ps`'s unresolved rows (see the
   [FAQ](../FAQ.md#what-does-a--in-the-name-column-mean--and-when-do-i-need-elevation)).
   `[exited]` does not trigger this hint — a process already confirmed gone
   cannot meaningfully "grow", and elevation cannot help identify it either.

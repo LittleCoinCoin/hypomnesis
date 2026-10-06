@@ -14,8 +14,8 @@
 //!   visible devices. On Linux (`NVML`) the list is compute-only; on
 //!   Windows (`PDH`, `WDDM 2.0`+) the list includes every GPU memory
 //!   holder (compositor, browsers, games, compute); on macOS (Metal
-//!   ledger) the list enumerates every same-user PID holding
-//!   `graphics_footprint` bytes. See the `--help` Limitations text and
+//!   ledger) the list enumerates every process holding
+//!   `graphics_footprint` bytes the sandbox lets it read. See the `--help` Limitations text and
 //!   the rustdoc for [`hypomnesis::gpu_processes`] for the
 //!   per-platform breakdown.
 //! - `hmn spill -- <command>` — run a command while polling
@@ -130,11 +130,14 @@ mod watch;
                   paged — SHARED at or above the same 256 MiB floor — reads `PAGED` and the \
                   device's other processes read `device`; the summary line states the device's \
                   verdict once, with its free VRAM, shared bytes and paged count. `PAGED` names \
-                  who is being paged, not who caused the pressure. `?` (not `no`) means spill \
-                  isn't measurable here (non-Windows, pre-WDDM-2.0, a non-NVIDIA adapter, or a \
-                  PDH hiccup) — never rendered as `no`, so it can't be misread as \"measured, \
-                  not spilling\". Use `hmn watch`/`hmn spill` when the growth-over-baseline \
-                  distinction matters.\n\
+                  who is being paged, not who caused the pressure. When spill is not measured \
+                  the cell reads \
+                  `n/a` on Linux and macOS, where there is no shared-residency counter and so no \
+                  spill to measure; `?` (not `no`) on Windows when spill exists but cannot be \
+                  read now (pre-WDDM-2.0, a non-NVIDIA adapter, a PDH hiccup, or a build without \
+                  the `pdh` feature). Neither is ever rendered as `no`, so neither can be misread \
+                  as \"measured, not spilling\". Use `hmn watch`/`hmn spill` when the \
+                  growth-over-baseline distinction matters.\n\
                   - On Windows, `?` in the NAME column is now rare (since v0.2.8): a \
                   `CreateToolhelp32Snapshot` fallback (the same mechanism `Get-Process`/Task \
                   Manager use) resolves most PIDs `OpenProcess` can't, including ordinary \
@@ -143,19 +146,23 @@ mod watch;
                   sample and the name lookup — elevation would not help) or `[protected]` \
                   (the snapshot fallback itself could not be taken — very rare; re-run \
                   elevated). The Windows kernel itself (PID 4) renders as `[kernel]`, not \
-                  `?` or `[protected]`. This distinction is Windows-only; Linux/macOS \
-                  unresolved rows remain a bare `?`/absent name — run as the owning user \
-                  or with `sudo` there.\n\
-                  - Security note: a `[protected]` row (or a bare `?` on Linux/macOS) that \
+                  `?` or `[protected]`. This distinction is Windows-only; Linux and macOS \
+                  unresolved rows remain a bare `?`/absent name. On Linux, run as the \
+                  owning user or with `sudo` to resolve one.\n\
+                  - Security note: a `[protected]` row (or, on Linux, a bare `?`) that \
                   does not resolve under elevation is worth investigating — by construction \
                   it is either a process owned by another user, a process running as \
                   SYSTEM/LOCAL SERVICE/NETWORK SERVICE, a PPL-protected process, or (rarely) \
                   the snapshot API itself failing. None of these are intrinsically \
                   malicious, but on a single-user desktop an unexpected one holding \
-                  substantial VRAM is worth investigating. The summary line's protected-count \
+                  substantial VRAM is worth investigating. On macOS a bare `?` means a sandbox \
+                  withheld the name, and elevation does not change that; see README \
+                  Limitations, item 9. The summary line's protected-count \
                   parenthetical counts `[protected]`/absent-name/the rare nvidia-smi-fallback \
                   literal `?` — not `[exited]`, since elevation can't help a process that's \
-                  already gone.\n\
+                  already gone. On macOS the same clause reads \
+                  `re-run outside the sandbox`: a sandbox, not the user, withholds the name, \
+                  and elevation does not lift it.\n\
                   - Pre-WDDM-2.0 Windows falls back to `nvidia-smi --query-compute-apps`, \
                   which is compute-only and may show `[N/A]` memory under consumer WDDM \
                   (parser drops those rows).\n\
@@ -166,9 +173,9 @@ mod watch;
                   (`graphics_footprint` ledger entry); the kernel evicts idle Metal pages, \
                   so the same PID may report different values across calls. Same \
                   resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS`.\n\
-                  - macOS: cross-user PIDs are silently skipped — the per-PID `ledger` \
-                  syscall returns `EPERM` for processes owned by another user. To list \
-                  every PID on the system, run elevated (`sudo hmn ps`)."
+                  - macOS: the sandbox, not process ownership, decides what `hmn` can read — \
+                  unsandboxed, every user's processes are listed and elevation does not \
+                  help; see README Limitations, item 9."
 )]
 struct Cli {
     /// Subcommand. Omitted for the default device-summary view.
@@ -192,8 +199,9 @@ enum Commands {
     /// List processes holding GPU memory. On Linux: compute-only via
     /// NVML. On Windows / WDDM 2.0+: every GPU memory holder via PDH
     /// (compositor, browsers, compute, etc.). On macOS: every
-    /// same-user PID holding `graphics_footprint` ledger bytes; run
-    /// elevated (`sudo`) to include cross-user PIDs. See `hmn --help`
+    /// process holding `graphics_footprint` ledger bytes that the
+    /// sandbox lets it read (the sandbox, not process ownership, decides;
+    /// see README Limitations, item 9). See `hmn --help`
     /// Limitations for the full per-platform breakdown.
     Ps {
         /// Keep only this PID. Repeatable (`--pid A --pid B`): a process
@@ -205,7 +213,10 @@ enum Commands {
         /// Filter to a single GPU index. Default: every device reported
         /// by `device_count()`. An index that cannot be listed (out of
         /// range, or its query failing) is an error, exit `2`, rather than
-        /// an empty table that would read as an idle card.
+        /// an empty table that would read as an idle card. Without
+        /// `--device`, a device whose query fails is skipped with a stderr
+        /// line ending `(skipped)`; when every device failed, the exit is
+        /// `2` with no table.
         #[arg(long, value_name = "INDEX")]
         device: Option<u32>,
         /// Hide rows below this total footprint (`used_bytes +
@@ -257,7 +268,9 @@ enum Commands {
         /// answers "is my job on the GPU?" as a one-line gate. Off by
         /// default: without it, `hmn ps` exits `0` whether or not anything
         /// matched. A device named by `--device` that cannot be listed is
-        /// still exit `2`.
+        /// still exit `2`. A listing where every device failed is also `2`,
+        /// never `1`, and so is an empty listing that skipped a failed
+        /// device, since `1` means nothing matched on every device queried.
         #[arg(long)]
         exit_status: bool,
     },

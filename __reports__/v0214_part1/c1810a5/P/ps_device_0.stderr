@@ -1,0 +1,1 @@
+hmn: ps failed to query device 0: no GPU measurement source available (NVML, DXGI, PDH, and nvidia-smi all failed or are disabled)

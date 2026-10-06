@@ -203,11 +203,15 @@ who caused the pressure. **This is not equivalent to `hmn watch`'s verdict for t
 instant** — a workload whose own baseline shared usage already sits above 256 MiB (an unusually
 large staging heap) reads as spilling here and correctly `no` there once its baseline is
 subtracted. `null`
-(`?` in the text table) means spill isn't measurable at all — non-Windows, built without the
-`pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, or the adapter's dedicated
-capacity itself coming back unassessable — and is never collapsed into `false`/`no`, so a script
-checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". `hmn
-watch`'s own SPILL column/`spilling` field carries the identical `null`/`?` honesty (since
+means spill isn't measurable at all, and is never collapsed into `false`/`no`, so a script
+checking `.spilling === true` can't mistake "can't tell" for "measured, not spilling". The text
+table tells the two kinds of "can't tell" apart (since v0.2.14): it shows
+`n/a` on Linux and macOS, where spill cannot exist, and `?` on Windows, where spill exists but
+cannot be read now — built without the `pdh` feature, pre-`WDDM 2.0`, a non-NVIDIA adapter, a
+`PDH` hiccup, or the adapter's dedicated capacity itself coming back unassessable; `--json` says
+`null` for all of them. CUDA managed-memory oversubscription is not measured either, so `n/a`
+on Linux means "this tool does not measure it", not "nothing is oversubscribed". `hmn watch`'s
+own SPILL column/`spilling` field carries the identical `null`/`n/a` or `?` honesty (since
 v0.2.11) for its own unmeasurable case — no tracker constructed, or `SpillTracker::is_measurable()`
 false for this run — so the two commands never disagree about what "can't tell" looks like, only
 about what "spilling" itself means (instantaneous floor vs. growth-over-baseline). Reach for
@@ -243,7 +247,7 @@ need no `cfg`), but `is_spill_measurable()` returns `false`, `observe()` is a
 no-op, and `hmn spill` runs your command then prints *"spill not measurable on
 this platform"* instead of a misleading all-zeros report. `hmn watch`'s closing
 summary says the same since v0.2.13 (before, it printed the all-zeros report,
-ending in `no spill observed`), and its SPILL column shows `?`. In `--json` output,
+ending in `no spill observed`), and its SPILL column shows `n/a`. In `--json` output,
 check `measurable` before trusting `spilled: false`.
 
 ## What does a `?` in the NAME column mean — and when do I need elevation?
@@ -279,23 +283,35 @@ name at the limit is extended from the `/proc/<pid>/exe` link or `argv[0]`
 when either shows the full one. An unresolved row means
 `/proc/<pid>/comm` was unreadable — usually a genuine cross-user permission
 wall, not a false one the way Windows' old `OpenProcess`-only path was; run
-as the owning user or with `sudo` to resolve it. On macOS, `sudo hmn ps`
-similarly un-skips cross-user PIDs the `ledger` syscall rejects with
-`EPERM`. Both platforms still render an unresolved row as a bare `?` (no
-`[exited]`/`[protected]` split) — there is no equivalent false-wall to
-collapse there the way there was on Windows.
+as the owning user or with `sudo` to resolve it. On macOS a name is `?`
+when a sandbox withheld `proc_pidpath`; see
+[README Limitations, item 9](../README.md#binary-hmn). Both platforms still
+render an unresolved row as a bare `?` (no `[exited]`/`[protected]` split)
+— there is no equivalent false-wall to collapse there the way there was on
+Windows.
 
 The distinction is deliberately surfaced because it is security-relevant: a
-`[protected]` row (or a bare `?` on Linux/macOS) holding substantial `VRAM`
+`[protected]` row (or, on Linux, a bare `?`) holding substantial `VRAM`
 that *still* doesn't resolve under elevation is one of — another user's
 process, `SYSTEM`, a `PPL`-protected process, or (rarely) the snapshot API
 itself failing — and on a single-user desktop an unexpected one is worth
-investigating. Note that **measurement itself never needs elevation**: the
-`PDH` counters, including everything `hmn spill` reads, are readable
-unprivileged; elevation only improves *name resolution*. The
+investigating. On macOS a bare `?` means a sandbox withheld the name, and
+elevation does not change that; see
+[README Limitations, item 9](../README.md#binary-hmn). Note that
+**measurement itself never needs elevation**: the `PDH` counters, including
+everything `hmn spill` reads, are readable unprivileged; elevation only
+improves *name resolution*. The
 `(N protected — re-run elevated for names)` summary-line count reflects
 only true `[protected]`/unresolved rows — `[exited]` rows are deliberately
 excluded, since elevation cannot help a process that has already exited.
+On macOS the clause reads `(N protected — re-run outside the sandbox)`: a
+macOS name is withheld by a sandbox, and elevation does not lift it.
+
+A Seatbelt profile that also denies `process-info*` to the caller itself
+(`(deny process-info*)` with no `(allow process-info* (target self))`)
+makes any Foundation program abort inside Apple's `libdispatch` before
+`hmn` code runs: `hmn ps` exits 133 under it, while `hmn --version` exits
+0. That is the profile, not an `hmn` bug.
 
 ## Why is there no `hmn kill` or `hmn spill --kill`?
 

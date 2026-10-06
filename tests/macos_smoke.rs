@@ -12,12 +12,16 @@
 //! `missing_docs` lint would otherwise fire on non-macOS builds where
 //! the crate appears empty).
 //!
-//! Tests 1, 2, 5, 6 run unconditionally on any macOS host. Tests 3 and 4
+//! Tests 1, 2, 5, 6 and 7 run unconditionally on any macOS host (test 7
+//! prints a skip line where `device_count` is not 1). Tests 3 and 4
 //! are `#[ignore]`-gated because they require Apple Silicon hardware
 //! with a real Metal device — they would fail on Intel Macs (where the
 //! Metal backend returns `None` and the dispatcher falls through to
-//! `NoGpuSource`) or on hosted runners without a usable GPU. Run them
-//! locally on Apple Silicon with `cargo test -- --ignored`.
+//! `NoGpuSource`) or on hosted runners without a usable GPU. Test 8 is
+//! `#[ignore]`d too: it applies Seatbelt profiles with
+//! `/usr/bin/sandbox-exec`, which needs an unsandboxed parent, and fails
+//! rather than skips where it cannot. Run them locally on Apple Silicon
+//! with `cargo test -- --ignored`.
 
 #![cfg(target_os = "macos")]
 
@@ -160,4 +164,147 @@ fn snapshot_now_includes_gpu_on_macos() {
         snap.gpu.is_some(),
         "expected snap.gpu to be Some on macOS (Metal backend should populate it)"
     );
+}
+
+#[test]
+fn device_index_past_count_is_out_of_range_on_apple_silicon() {
+    // Apple Silicon reports one Metal device, so index 1 is past the end.
+    // An Intel Mac (or any host without a count source) skips. The count
+    // comes from `sysctl machdep.cpu.brand_string`, which a sandbox that
+    // denies `process-info*` still allows, so this runs sandboxed too.
+    let count = hypomnesis::device_count();
+    let Ok(1) = count else {
+        eprintln!("device_count() is {count:?} on this host, not Ok(1): skipping");
+        return;
+    };
+    for (name, error) in [
+        ("device_info", hypomnesis::device_info(1).err()),
+        ("process_gpu_info", hypomnesis::process_gpu_info(1).err()),
+        ("gpu_processes", hypomnesis::gpu_processes(1).err()),
+    ] {
+        assert!(
+            matches!(
+                error,
+                Some(HypomnesisError::DeviceIndexOutOfRange { index: 1, count: 1 })
+            ),
+            "expected DeviceIndexOutOfRange {{ index: 1, count: 1 }} from {name}(1), got {error:?}"
+        );
+    }
+}
+
+/// The `process_exists` probes of `process_exists_under_sandbox_profiles`:
+/// PID 0 (`kernel_task`), PID 1 (`launchd`), a dead PID (`i32::MAX`, a
+/// valid `pid_t` no process holds) and the calling process.
+fn process_exists_probes() -> [(&'static str, Option<bool>); 4] {
+    [
+        ("zero", hypomnesis::process_exists(0)),
+        ("launchd", hypomnesis::process_exists(1)),
+        ("dead", hypomnesis::process_exists(2_147_483_647)),
+        ("self", hypomnesis::process_exists(std::process::id())),
+    ]
+}
+
+/// The probe table as the `PE <label>=<result:?>` lines a child prints.
+fn process_exists_lines(table: &[(&str, Option<bool>)]) -> Vec<String> {
+    table
+        .iter()
+        .map(|(label, result)| format!("PE {label}={result:?}"))
+        .collect()
+}
+
+/// A Seatbelt profile no caller runs under. macOS lets a sandboxed process
+/// re-apply the very profile it runs under (measured: `(allow default)`
+/// inside `(allow default)` exits `0`), but no other one, so only a profile
+/// unique to this file tells "inside a sandbox" from "outside" everywhere.
+const PROBE_PROFILE: &str =
+    "(version 1)(allow default)(deny file-write* (literal \"/hmn-macos-smoke-probe\"))";
+
+/// Whether `/usr/bin/sandbox-exec` can apply `PROBE_PROFILE` here: true
+/// outside any sandbox; false inside one, where it exits `71`
+/// (`sandbox_apply: Operation not permitted`).
+#[allow(clippy::expect_used)] // test-only
+fn sandbox_can_apply_a_profile() -> bool {
+    std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", PROBE_PROFILE, "/usr/bin/true"])
+        .output()
+        .expect("spawn /usr/bin/sandbox-exec")
+        .status
+        .success()
+}
+
+#[test]
+#[ignore = "requires an unsandboxed parent and /usr/bin/sandbox-exec (applies Seatbelt profiles P and Q)"]
+#[allow(clippy::expect_used)] // test-only
+fn process_exists_under_sandbox_profiles() {
+    // No skip in either role: this test is `#[ignore]`d and run by hand on
+    // hardware, so a run that cannot exercise profiles P and Q must fail
+    // rather than report `ok` for a table it never checked.
+
+    // Child role: prove it runs inside a sandbox, then print the table and
+    // let the parent judge it. A top-level run that inherited
+    // `HMN_PE_CHILD` fails here instead of asserting nothing.
+    if std::env::var_os("HMN_PE_CHILD").is_some() {
+        assert!(
+            !sandbox_can_apply_a_profile(),
+            "HMN_PE_CHILD set outside a sandbox"
+        );
+        for line in process_exists_lines(&process_exists_probes()) {
+            println!("{line}");
+        }
+        return;
+    }
+
+    // Parent role: a sandbox cannot nest another one, so check before
+    // asserting anything that profiles can be applied from here.
+    assert!(
+        sandbox_can_apply_a_profile(),
+        "sandbox-exec cannot apply a profile here (already inside a sandbox?), \
+         so profiles P and Q cannot be exercised"
+    );
+
+    let open = [
+        ("zero", Some(true)),
+        ("launchd", Some(true)),
+        ("dead", Some(false)),
+        ("self", Some(true)),
+    ];
+    assert_eq!(process_exists_probes(), open, "unsandboxed");
+
+    // P is the issue #3 report profile: libproc refused for every PID
+    // but our own. Q adds a `kern.proc` denial. Measured while drafting:
+    // the `kern.proc` line alone refuses only dead PIDs (live ones still
+    // answer); only together with P's `process-info` denial does it
+    // refuse live ones too. So Q must keep P's lines, and Q is not P.
+    let p = "(version 1)(allow default)(deny process-info*)(allow process-info* (target self))";
+    let q = format!("{p}(deny sysctl-read (sysctl-name-prefix \"kern.proc\"))");
+    let refused = [
+        ("zero", None),
+        ("launchd", None),
+        ("dead", Some(false)),
+        ("self", Some(true)),
+    ];
+
+    let exe = std::env::current_exe().expect("current_exe of the test binary");
+    for (name, profile, expected) in [("P", p, open), ("Q", q.as_str(), refused)] {
+        let out = std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", profile])
+            .arg(&exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "process_exists_under_sandbox_profiles",
+                "--nocapture",
+            ])
+            .env("HMN_PE_CHILD", "1")
+            .output()
+            .expect("spawn /usr/bin/sandbox-exec");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let got: Vec<&str> = stdout.lines().filter(|l| l.starts_with("PE ")).collect();
+        assert_eq!(
+            got,
+            process_exists_lines(&expected),
+            "profile {name}: child stdout {stdout:?}, stderr {stderr:?}"
+        );
+    }
 }
