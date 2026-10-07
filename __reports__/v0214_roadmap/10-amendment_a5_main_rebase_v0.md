@@ -43,6 +43,9 @@ The leaves were authored against `v0214-part1` before the review that changed PR
 ## Proposed Solution
 Commit the amended leaves to `v0214-roadmap` as one roadmap commit, then dispatch one Sonnet verifier to attack all four amended leaves for tautological or unpassable gates and for any quote that does not match main or the done PR B leaves. Adjudicate its findings in a follow-up roadmap commit before the first implementer is dispatched.
 
+## Verification
+One Sonnet verifier attacked the amended leaves (commit 0d1cbcd): PASS WITH NOTES, 0 blockers, 9 notes (`10-a5_sweeps/verify.md`). It re-ran a sample of befores on b716087 (all matched), the lib arithmetic (95 + 34 + 9 − 2 = 136), the XNU `KERN_PROC_ALL` behaviour (1097 probed against 1092 filled; a 3-record buffer: `rc` -1, errno 12, `len` 0) and the same-boot compare base. Adjudicated by the coordinator and applied in the follow-up roadmap commit: N1 (the `run_ps` pin's `catches:` narrowed to what a grep sees), N2 (the literal guard greps removed lines only), N3 (`Z --job` and `--job S` must exit 64), N4 (one `### Added` heading, counted in part2_close), N5 (a grep pin that `trust_kinfo_listing` is wired), N6 (`gpujob` compiled outside the sandbox into `target/`, `compare_names.py`'s prefix rule and empty-overlap exit, the harness README's PR C paragraph), N7 (live-list gates re-run once before a failure counts), N8 (the When-it-bites count scoped to its table). N9 needed nothing.
+
 ## Recommendations
 1. Approved under the user's brief of 2026-10-07 ("Phase 0 … amendment A5, before any code").
 2. Implementers measure, never trust, the `b716087 (measured)` values in their gates' befores; a mismatch is a spec defect to report, as in A4.
