@@ -341,11 +341,11 @@ enum Commands {
     /// running process gets a one-line warning on stderr (since
     /// v0.2.13), and so does one that is unreadable here (a macOS
     /// sandbox's refusal: its rows read 0 MiB); both are still watched.
-    /// `--follow-new` says how many processes it cannot follow. Spill is measured as shared-memory
-    /// growth above the first sample, so a spill already under way at
-    /// attach is not counted; since v0.2.13 a warning says so at attach
-    /// and the closing summary repeats it (`hmn ps` shows the current
-    /// state).
+    /// `--follow-new` says how many processes it cannot follow. Spill is
+    /// measured as shared-memory growth above the first sample, so a
+    /// spill already under way at attach is not counted; since v0.2.13 a
+    /// warning says so at attach and the closing summary repeats it
+    /// (`hmn ps` shows the current state).
     /// If the OS recycles a watched PID onto a different process
     /// mid-watch, a resolved-name change is used as a best-effort signal
     /// to reset that row's baseline rather than mixing two processes'

@@ -166,8 +166,9 @@ pub const REMEDY_OUTSIDE_SANDBOX: bool = cfg!(target_os = "macos");
 /// exhaustively by [`remedy_text`], the sole place that interprets it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemedyPurpose {
-    /// The names of protected rows, on `hmn ps`'s summary line
-    /// (`for names`).
+    /// The names of protected rows and of the processes the caller was
+    /// refused, on `hmn ps`'s summary line, the denial line and
+    /// `hmn watch`'s denied-PID notice (`for names`).
     Names,
     /// An unresolved PID whose memory grew, in `hmn watch`'s growth hint
     /// (`to identify`).

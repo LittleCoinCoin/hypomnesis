@@ -1280,6 +1280,8 @@ pub fn run_watch(
         let rows = match gpu_process_listing(device) {
             Ok(listing) => listing.entries,
             Err(e) => {
+                // Raw `{e}`, not `failure_detail`: attach said the remedy
+                // once, and the sandbox does not change mid-run.
                 eprintln!(
                     "hmn watch: sample failed at +{:.1}s ({e}); skipping interval",
                     elapsed.as_secs_f64()

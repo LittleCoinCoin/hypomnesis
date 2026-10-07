@@ -17,9 +17,10 @@
 //! are `#[ignore]`-gated because they require Apple Silicon hardware
 //! with a real Metal device — they would fail on Intel Macs (where the
 //! Metal backend returns `None` and the dispatcher falls through to
-//! `NoGpuSource`) or on hosted runners without a usable GPU. Tests 8 and 9 are `#[ignore]`d
-//! too: they apply Seatbelt profiles with `/usr/bin/sandbox-exec`, which
-//! needs an unsandboxed parent, and fail rather than skip where they cannot. Run them locally on Apple Silicon
+//! `NoGpuSource`) or on hosted runners without a usable GPU. Tests 8 and 9
+//! are `#[ignore]`d too: they apply Seatbelt profiles with
+//! `/usr/bin/sandbox-exec`, which needs an unsandboxed parent, and fail
+//! rather than skip where they cannot. Run them locally on Apple Silicon
 //! with `cargo test -- --ignored`.
 
 #![cfg(target_os = "macos")]

@@ -52,10 +52,8 @@ pub(super) const ESRCH: i32 = 3;
 
 /// `ENOMEM` from `<errno.h>`: the buffer is too small. `sysctl` answers
 /// it when the records do not all fit the buffer, and writes back a `len`
-/// of 0. By then `KERN_PROC_ALL` has copied the whole records that fit,
-/// while `KERN_PROC_PID`'s one-record buffer holds none when the kernel's
-/// record is larger, so a buffer from a call that failed with `ENOMEM` is
-/// never parsed.
+/// of 0. [`classify_kern_proc_pid`] and [`classify_kern_proc_all`] answer
+/// it.
 pub(super) const ENOMEM: i32 = 12;
 
 /// `EPERM` from `<errno.h>`: the caller's sandbox refuses the call.
@@ -441,8 +439,7 @@ mod tests {
 
     #[test]
     fn classify_kern_proc_all_enomem_is_retry_even_when_the_buffer_holds_records() {
-        // A short fill copies the whole records that fit, then fails with
-        // `ENOMEM` and writes back a `len` of 0: never parsed.
+        // `ENOMEM` is `Retry` whatever the buffer holds.
         let mut two = record(1, b"launchd");
         two.extend_from_slice(&record(77, b"WindowServer"));
         assert_eq!(

@@ -219,9 +219,8 @@ pub struct GpuProcessEntry {
 /// the processes the platform refused to measure, so a caller can ask
 /// whether one PID was among them; `denied_pids.len()` is how many.
 ///
-/// [`crate::gpu_process_listing`] has the per-platform table and the full
-/// rule. Report the count: inside an App Sandbox there is no "outside" to
-/// re-run in.
+/// [`crate::gpu_process_listing`] has the per-platform table, the full
+/// rule and what to report.
 ///
 /// `#[non_exhaustive]`: fields may be added in future releases.
 #[non_exhaustive]

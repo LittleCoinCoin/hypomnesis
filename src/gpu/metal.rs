@@ -976,11 +976,9 @@ fn kern_proc_all_buffer_len(probed: usize) -> usize {
 /// The records come through [`parse_kinfo_records`], the parser
 /// `KERN_PROC_PID` uses. Each attempt is a probe with a null buffer, which
 /// gives the length, then a fill into a buffer of [`kern_proc_all_buffer_len`]
-/// bytes, judged by [`classify_kern_proc_all`]. A fill that fails with `ENOMEM`
-/// (the table outgrew the buffer) is tried again, up to
-/// `KERN_PROC_ALL_MAX_ATTEMPTS` attempts in all. A
-/// failed call, including a refusal, is `None`; its buffer and `len` are
-/// never read.
+/// bytes, judged by [`classify_kern_proc_all`]. A fill it calls `Retry` is
+/// tried again, up to `KERN_PROC_ALL_MAX_ATTEMPTS` attempts in all; one it
+/// calls `Failed`, a refusal included, is `None`.
 #[allow(unsafe_code)]
 fn list_kern_proc_all() -> Option<Vec<KinfoRecord>> {
     let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_ALL];
@@ -1069,8 +1067,7 @@ fn list_pids() -> Option<Vec<i32>> {
 /// The `p_comm` bytes of `pid`, from its `KERN_PROC_PID` record.
 ///
 /// The source of a name where `proc_pidpath` was refused. `None` unless
-/// [`classify_kern_proc_pid`] says the call is a record for `pid`: a
-/// refused call's zeroed buffer is never read as a record.
+/// [`classify_kern_proc_pid`] says the call is a record for `pid`.
 fn kern_proc_pid_comm(pid: i32) -> Option<Vec<u8>> {
     let (rc, errno, buf, len) = kern_proc_pid_raw(pid);
     if classify_kern_proc_pid(rc, errno, &buf, len, pid) != PidLookup::Record {

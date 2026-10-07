@@ -390,8 +390,8 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 /// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend
 /// fails (or no backend is enabled by features).
-/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when at least one
-/// process was refused and none other than the caller's could be read.
+/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when the
+/// process list was enumerated but not read, as that variant defines.
 pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
     gpu_process_listing(device_index).map(|listing| listing.entries)
 }
@@ -411,15 +411,14 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// |---|---|---|
 /// | Linux | always empty | never returned |
 /// | Windows | always empty: only names can be refused, which `[protected]` states | never returned |
-/// | macOS | the PIDs whose ledger read the caller's sandbox refused (`EPERM`), not the caller's own, a gone one or a non-positive one | when at least one process was refused and none other than the caller's could be read; a machine with nothing to refuse is `Ok` |
+/// | macOS | the PIDs whose ledger read the caller's sandbox refused (`EPERM`), not the caller's own, a gone one or a non-positive one | when the list was enumerated but not read, as the variant defines; a machine with nothing to refuse is `Ok` |
 ///
 /// On macOS an `Ok` listing with a non-empty `denied_pids` is a partial
 /// one: `entries` holds the processes the caller could read, and no
 /// entries means those hold no GPU memory. `entries` can hold the caller's
-/// own row, since a process that has initialised Metal holds a few KiB
-/// (`hmn` lists itself at 16 KiB). Whether it appears depends on the
-/// caller, and it is not returned when the result is
-/// [`HypomnesisError::ProcessListDenied`].
+/// own row, since a process that has initialised Metal holds a few KiB.
+/// Whether it appears depends on the caller, and it is not returned when
+/// the result is [`HypomnesisError::ProcessListDenied`].
 ///
 /// # Errors
 ///
@@ -427,8 +426,8 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend
 /// fails (or no backend is enabled by features).
-/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when at least one
-/// process was refused and none other than the caller's could be read.
+/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when the
+/// process list was enumerated but not read, as that variant defines.
 pub fn gpu_process_listing(device_index: u32) -> Result<GpuProcessListing> {
     // Metal is the macOS primary source: per-PID ledger reads of
     // `graphics_footprint` over `proc_listpids`, or over
@@ -523,13 +522,13 @@ pub fn gpu_process_listing(device_index: u32) -> Result<GpuProcessListing> {
 /// when the list was enumerated but not read, otherwise the rows and the
 /// denied PIDs, each sorted by `pid`.
 ///
-/// The list was not read when at least one process was refused and no process
-/// other than the caller's was read (`others_read` is 0; a zero balance counts
-/// as read). A sandboxed caller's own row is not returned on its own: `hmn`
-/// lists itself at 16 KiB, so where the sandbox refuses every other process
-/// `entries` is exactly the caller's row, and returning it as `Ok` would be
-/// the empty list again. Nothing denied is not a refusal: an idle machine has
-/// an empty list.
+/// The list was not read as [`HypomnesisError::ProcessListDenied`] defines it
+/// (`others_read`, the processes other than the caller's that were read, is
+/// 0; a zero balance counts as read). A sandboxed caller's own row is not
+/// returned on its own: `hmn` lists itself at 16 KiB, so where the sandbox
+/// refuses every other process `entries` is exactly the caller's row, and
+/// returning it as `Ok` would be the empty list again. Nothing denied is not
+/// a refusal: an idle machine has an empty list.
 #[cfg(any(all(target_os = "macos", feature = "metal"), test))]
 fn decide_listing(
     mut entries: Vec<GpuProcessEntry>,

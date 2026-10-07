@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enumerates the processes. A name comes from `proc_pidpath`, and from the kernel's `p_comm`
   (cut at 16 bytes) only where `proc_pidpath` is refused, never for a process that is gone.
   A per-PID ledger read is bytes, denied, gone (`ESRCH`) or failed, and only a refusal (`EPERM`)
-  counts as denied. Where libproc works, the output is unchanged.
+  counts as denied. Where libproc works, `proc_listpids` enumerates and `proc_pidpath` names.
 
 - **`gpu_process_listing`, `GpuProcessListing` and `HypomnesisError::ProcessListDenied`**
   (`src/gpu/mod.rs`, `src/snapshot.rs`, `src/error.rs`) — `gpu_process_listing(device_index)`
@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denies only the ledger read printed `0 GPU processes found.`. `--pid N` counts only N among the
   refused processes, and `--exit-status` exits `2`, not `1`, for an empty listing in which a
   process the filters could match was unreadable. The count goes to stderr; `--json` and the table
-  carry no field for it. The Windows and Linux text, `N protected — re-run elevated for names`, is
-  unchanged, and no process is ever refused there.
+  carry no field for it. On Windows and Linux the text is `N protected — re-run elevated for
+  names`, and no process is ever refused there.
 
 - **`hmn watch` notices the processes a macOS sandbox hides** (`src/bin/hmn/watch.rs`,
   `format.rs`, `main.rs`) — at attach, an explicit PID the caller was refused gets
