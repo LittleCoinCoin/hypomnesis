@@ -98,17 +98,17 @@ own Bash sandbox (2.1.273, measured 2026-10-03) refuses none of the calls `hmn` 
 ([evidence](../__reports__/field_check_v0213/evidence/claude_code_sandbox.md)). It takes an
 explicit `(deny process-info…)`, or the App Sandbox:
 
-| Caller | `proc_listpids` | others' `ledger` | `proc_pidpath` | `sysctl kern.proc` | `hmn` 0.2.13 |
-|---|---|---|---|---|---|
-| unsandboxed | ok | ok | ok | ok | correct |
-| Codex Seatbelt policy | ok | ok | ok | `kern.proc.all` denied, `kern.proc.pid` ok | correct |
-| App Sandbox | `EPERM` | `EPERM` (self ok) | ok | ok (823 processes, `kernel_task` named) | `0 found`, exit `0` |
-| explicit `deny process-info*` (the report's profile; agent sandboxes that deny it to stop argv leaks) | `EPERM` | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit `0` |
-| the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok for them | ok | `0 found`, exit `0`, though the job is readable |
-| `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" |
-| Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | ok | ok | ok | ok (1108 processes, `kernel_task` named) | correct |
+| Caller | `proc_listpids` | others' `ledger` | `proc_pidpath` | `sysctl kern.proc` | `hmn` 0.2.13 | `hmn` 0.2.14 |
+|---|---|---|---|---|---|---|
+| unsandboxed | ok | ok | ok | ok | correct | unchanged: lists every user's processes |
+| Codex Seatbelt policy | ok | ok | ok | `kern.proc.all` denied, `kern.proc.pid` ok | correct | unchanged: lists the processes it can read |
+| App Sandbox | `EPERM` | `EPERM` (self ok) | ok | ok (823 processes, `kernel_task` named) | `0 found`, exit `0` | blind: exit `2`, `process list unreadable: N refused, none other than the caller's could be read — re-run outside the sandbox` |
+| explicit `deny process-info*` (the report's profile; agent sandboxes that deny it to stop argv leaks) | `EPERM` | `EPERM` | `EPERM` | ok (969 processes) | `0 found`, exit `0` | blind: exit `2` with the same denial line and the count |
+| the same, with `same-sandbox` allowed | `EPERM` | ok for the sandbox's own jobs | ok for them | ok | `0 found`, exit `0`, though the job is readable | partial: the job with its 256 MiB, plus `N unreadable — re-run outside the sandbox` |
+| `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" | listed: every row named, from `p_comm` where `proc_pidpath` is refused, with no `?` and no remedy |
+| Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | ok | ok | ok | ok (1108 processes, `kernel_task` named) | correct | unchanged: lists every GPU process (28), exit `0` |
 
-With PR B, the Claude Code sandbox still refuses nothing `hmn` needs: measured 2026-10-04 in one sandboxed session (Claude Code 2.1.273), the PR B build lists the 18 GPU processes normally and exits `0`, as the 0.2.13 build does ([evidence](../__reports__/v0214_part1/claude_code_sandbox/pr_b.md)).
+With PR B, the Claude Code sandbox still refuses nothing `hmn` needs: measured 2026-10-04 in one sandboxed session (Claude Code 2.1.273), the PR B build lists the 18 GPU processes normally and exits `0`, as the 0.2.13 build does ([evidence](../__reports__/v0214_part1/claude_code_sandbox/pr_b.md)). With PR C, measured 2026-10-08 in one sandboxed session of the same version, it lists all 28 GPU processes and reports nothing unreadable.
 
 **Why Windows never showed it.** PDH on Windows, and NVML on Linux, return every process's VRAM
 from one system-wide query, with no permission check per process. Only names can be refused there,
@@ -310,26 +310,30 @@ docs that describe only its own behaviour.
 The fixtures, re-run on the M3 Pro (macOS 26.6.2) on 2026-10-04 against default-feature
 release builds of c1810a5 and PR B, with `sandbox-exec` and the profiles of the campaign's
 harness ([`harness/`](../__reports__/v0214_part1/harness/README.md)). Each part 1 result is a row of
-[`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md); the PR C rows are filled when PR C lands.
+[`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md); the PR C rows were run on 2026-10-08 the same way, against PR C's release build.
 
 | Fixture | PR | Result | Evidence |
 |---|---|---|---|
 | the report's profile, PR B's form | B | `hmn ps` exits `2` with `hmn: ps failed to query device 0: … (skipped)` and no table; `--exit-status` exits `2`; `--json` prints nothing | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (4)–(6) |
-| the report's profile, PR C's form: exit `2` with the count and the remedy | C | pending, PR C | |
-| `same-sandbox` allowed: the job listed **with its bytes**, plus the unreadable count | C | pending, PR C | |
-| pidinfo denied: names, not `?` | C | pending, PR C | |
+| the report's profile, PR C's form: exit `2` with the count and the remedy | C | `hmn ps` exits `2` with no table; `--device 0` and `hmn watch 1` exit `2` with the same denial | `hmn: ps failed to query device 0: process list unreadable: 954 refused, none other than the caller's could be read — re-run outside the sandbox (skipped)` |
+| `same-sandbox` allowed: the job listed **with its bytes**, plus the unreadable count | C | `hmn ps` exits `0` and lists the job at 256 MiB beside `hmn`'s own 16 KiB row; `ps --pid <job> --exit-status` exits `0` | `hmn: 2 GPU processes found (256 MiB committed total; 948 unreadable — re-run outside the sandbox).` |
+| pidinfo denied: names, not `?` | C | `hmn ps --json` lists 28 rows, each with a name, `hmn`'s own row included; exit `0`, no `protected` and no `re-run elevated` in stderr (PR B: 25 rows, 24 nameless) | `hmn: 28 GPU processes found (802 MiB committed total).` |
 | pidinfo denied, the remedy | B | `N protected — re-run outside the sandbox` | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (12) |
 | unsandboxed: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | [`c1810a5/none`](../__reports__/v0214_part1/c1810a5/none/), [`pr_b/none`](../__reports__/v0214_part1/pr_b/none/) |
 | the Codex policy: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | [`harness/CODEX_PIN`](../__reports__/v0214_part1/harness/CODEX_PIN), [`pr_b/C`](../__reports__/v0214_part1/pr_b/C/) |
 | the App Sandbox build, PR B's form | B | `hmn ps` exits `2` with the skip line; `hmn ps --device 0` exits `2` with the `NoGpuSource` text naming Metal | [`app_sandbox/`](../__reports__/v0214_part1/app_sandbox/README.md) |
-| the App Sandbox build, PR C's form: exit `2` with the denial line carrying `process list unreadable:` | C | pending, PR C | |
+| the App Sandbox build, PR C's form: exit `2` with the denial line carrying `process list unreadable:` | C | `hmn ps`, `hmn ps --device 0` and `hmn watch 1 --duration 1s --interval 1s` each exit `2`; plain `ps` ends the line with `(skipped)` | `hmn: ps failed to query device 0: process list unreadable: 969 refused, none other than the caller's could be read — re-run outside the sandbox` |
 | the Claude Code sandbox | B | lists normally with both builds (18 processes, exit `0`) | [`claude_code_sandbox/`](../__reports__/v0214_part1/claude_code_sandbox/pr_b.md) |
-| a profile denying only `process-info-ledger` | B | the residual: `0 GPU processes found.`, exit `0`, as README Limitations item 9 states; PR C closes it | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (17) |
+| a profile denying only `process-info-ledger` | B | the residual: `0 GPU processes found.`, exit `0`; PR C closes it | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (17) |
 | `hmn ps --device 1` | B | `device index 1 out of range (have 1 devices)`, unsandboxed and under the report's profile | [`fixtures/cli.txt`](../__reports__/v0214_part1/fixtures/cli.txt) |
 | `hmn watch 0` | B | no warning | [`fixtures/cli.txt`](../__reports__/v0214_part1/fixtures/cli.txt) |
 | `cargo test --test macos_smoke -- --ignored` | B | 3/3 (2/2 at c1810a5) | [`fixtures/tests.txt`](../__reports__/v0214_part1/fixtures/tests.txt) |
 | the `kinfo_proc` test under Rosetta 2 | B | passes | [`fixtures/tests.txt`](../__reports__/v0214_part1/fixtures/tests.txt) |
 | `tests/cli_ps.rs` on PR B's `macos-latest` CI | B | run 37210951264: `branch=expected` four times, with and without `--exit-status` on both jobs | [`ci_macos_cli_ps.md`](../__reports__/v0214_part1/ci_macos_cli_ps.md) |
+| the same policy run directly (profile S0) | C | `hmn ps` and `hmn ps --device 0` exit `2` with the denial line; `hmn watch 1` exits `2` too | `hmn: ps failed to query device 0: process list unreadable: 953 refused, none other than the caller's could be read — re-run outside the sandbox` |
+| a profile denying only `process-info-ledger` (profile L), PR C's form | C | exit `2` with the denial line, where PR B exited `0` with `0 GPU processes found.`: the caller's own ledger read is denied too | `hmn: ps failed to query device 0: process list unreadable: 940 refused, none other than the caller's could be read — re-run outside the sandbox` |
+| the lib tests under Rosetta 2 | C | 118 passed, 0 failed, natively as well (95 on PR B) | `test result: ok. 118 passed; 0 failed` |
+| the architectures the 648-byte `kinfo_proc` layout was verified on | C | arm64 natively and x86_64 under Rosetta 2; real Intel hardware is untested, as `ROADMAP.md`'s untested-hardware row says | the lib tests pass on `aarch64-apple-darwin` and `x86_64-apple-darwin` |
 
 Gate set on every pushed commit (a test-first red commit is squashed into its green successor
 before a branch is pushed):
@@ -348,8 +352,8 @@ before a branch is pushed):
 - `cargo check --locked --no-default-features` (`ci.yml`);
 - `cargo check --locked --no-default-features --features nvml,dxgi,pdh` (`ci.yml`).
 
-`tests/cli_ps.rs` accepts exit `2` only together with the denial line, since agents run
-`cargo test` inside sandboxes too. Future field checklists use a realistic dead PID: macOS PIDs
+`tests/cli_ps.rs` accepts exit `2` with the denial skip line (label `skipped-device`) or with a skip line that carries the `NoGpuSource` text (label `skipped-device-nogpu`, which a macos-latest VM may legitimately give), since agents run `cargo test` inside sandboxes too; the PR's CI log says which fired, and on PR C's macos-latest jobs (run 37650659228) `branch=expected` fired four times, with and without `--exit-status` on both runners.
+Future field checklists use a realistic dead PID: macOS PIDs
 stop at 99999, and on Linux `pid_max` can exceed 999999.
 
 ---
