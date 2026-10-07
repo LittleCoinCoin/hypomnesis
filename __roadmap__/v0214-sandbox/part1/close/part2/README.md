@@ -22,8 +22,8 @@ Every new behaviour is macOS-only by construction. Windows and Linux output stay
 ## Status
 ```mermaid
 graph TD
-    kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::inprogress
-    api[Part 2 public API]:::planned
+    kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::done
+    api[Part 2 public API]:::inprogress
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -34,8 +34,8 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `kinfo_enumeration.md` | 📄 Leaf Task | 🔄 In Progress |
-| `api/` | 📁 Directory | ⬜ Planned |
+| `kinfo_enumeration.md` | 📄 Leaf Task | ✅ Done |
+| `api/` | 📁 Directory | 🔄 In Progress |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -46,3 +46,4 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `kinfo_enumeration.md` | `task/kinfo_enumeration` | 5131725, 73cc80a, 8519f1a (on b716087; red 578bf07 squashed into Step 2, A6 fixes folded into their steps) | Sonnet implementer; every gate PASS on each commit, full gate set green per commit, lib 138 native and Rosetta. Reviews: spec verifier PASS WITH NOTES (2 should-fix), independent FFI review PASS WITH NOTES (no UB, errno matches XNU under none/P/S/S0/Q/D/L/C; 3 should-fix), test review PASS WITH NOTES (34/34 tests fail on revert; 6 should-fix). A6 adopted them: pure `classify_kinfo_all` + bounded `fill_kinfo_all_with`, `comm_from_lookup`, 9 tests, non-vacuous harness scripts, exact `None` docs; implementer corrections adopted (EPERM un-cfg'd, `b"ab\xe3"` the incomplete tail). A6 delta verifier PASS WITH NOTES: every earlier survivor caught or a stated residual; its notes applied as doc/record fixups. Seam (coordinator): `tally_reads` keeps the caller's row in `found`, never in `others_read` or `denied`; gone PIDs and PIDs ≤ 0 in neither; `legacy_entries` is `None` iff `others_read == 0 && !denied.is_empty()`. Observation for ps_watch_unreadable: under S plain `ps` exits 0 listing hmn's own row with no count yet. |
