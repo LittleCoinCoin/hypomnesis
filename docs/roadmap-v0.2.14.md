@@ -68,7 +68,7 @@ Checking the report against the code and the kernel confirmed it, and went furth
 
 - **The cause is in the kernel source.** XNU's `ledger()` (`bsd/kern/sys_generic.c`) returns
   `ESRCH` from `proc_find`, then consults only `mac_proc_check_ledger`, the sandbox's hook. There
-  is no uid check. The crate's own first macOS probe (May 2026, `__reports__/macos_ledger/00-findings_v0.md`
+  is no uid check. The crate's own first macOS probe (May 2026, `macos_ledger/00-findings_v0.md`
   in commit `7045b5c`) had already read WindowServer's ledger unprivileged. "Cross-user needs
   root" came from `task_for_pid` and was never measured for `ledger`.
 - **The report's mechanism for the silent zero is wrong for its own profile.** Under
@@ -95,7 +95,7 @@ Seatbelt policy, which allows `process-info*` only for `same-sandbox` targets, `
 20 processes correctly; Chromium's `common.sb` keeps a TODO to deny it explicitly. Claude Code's
 own Bash sandbox (2.1.273, measured 2026-10-03) refuses none of the calls `hmn` makes, and `hmn`
 0.2.13 lists the GPU processes there with their bytes; `ps(1)`, a setuid binary, could not run
-([evidence](../__reports__/field_check_v0213/evidence/claude_code_sandbox.md)). It takes an
+(evidence: `field_check_v0213/evidence/claude_code_sandbox.md` at `f03298a7bb`). It takes an
 explicit `(deny process-info…)`, or the App Sandbox:
 
 | Caller | `proc_listpids` | others' `ledger` | `proc_pidpath` | `sysctl kern.proc` | `hmn` 0.2.13 | `hmn` 0.2.14 |
@@ -108,7 +108,7 @@ explicit `(deny process-info…)`, or the App Sandbox:
 | `process-info-pidinfo` denied outside the sandbox (`agent-safehouse` v0.12) | ok | ok | `EPERM` | ok | right numbers, names `?`, "re-run elevated" | listed: every row named, from `p_comm` where `proc_pidpath` is refused, with no `?` and no remedy |
 | Claude Code's Bash sandbox (macOS Seatbelt, `/sandbox`) | ok | ok | ok | ok (1108 processes, `kernel_task` named) | correct | unchanged: lists every GPU process (28), exit `0` |
 
-With PR B, the Claude Code sandbox still refuses nothing `hmn` needs: measured 2026-10-04 in one sandboxed session (Claude Code 2.1.273), the PR B build lists the 18 GPU processes normally and exits `0`, as the 0.2.13 build does ([evidence](../__reports__/v0214_part1/claude_code_sandbox/pr_b.md)). With PR C, measured 2026-10-08 in one sandboxed session of the same version, it lists all 28 GPU processes and reports nothing unreadable.
+With PR B, the Claude Code sandbox still refuses nothing `hmn` needs: measured 2026-10-04 in one sandboxed session (Claude Code 2.1.273), the PR B build lists the 18 GPU processes normally and exits `0`, as the 0.2.13 build does (evidence: `v0214_part1/claude_code_sandbox/pr_b.md` at `f03298a7bb`). With PR C, measured 2026-10-08 in one sandboxed session of the same version, it lists all 28 GPU processes and reports nothing unreadable.
 
 **Why Windows never showed it.** PDH on Windows, and NVML on Linux, return every process's VRAM
 from one system-wide query, with no permission check per process. Only names can be refused there,
@@ -141,7 +141,7 @@ that reads each PID separately, so it is the one where some rows can go missing.
   sandbox paths cannot be unit-tested any other way.
 - **The 648-byte `kinfo_proc` layout, and where it was checked.** Measured 2026-10-02 on the M3
   Pro (macOS 26.6.2, SDK 26.2) and re-run 2026-10-03; the programs and their verbatim output are
-  in [`__reports__/field_check_v0213/evidence/kinfo_proc_layout.md`](../__reports__/field_check_v0213/evidence/kinfo_proc_layout.md).
+  in `field_check_v0213/evidence/kinfo_proc_layout.md` at `f03298a7bb`.
   - arm64, natively: `sizeof(struct kinfo_proc)` is 648, `p_pid` sits at offset 40 and `p_comm`
     at offset 243 (17 bytes with the NUL). A live `KERN_PROC_PID` read of PID 1 returns one
     648-byte record named `launchd`, and `KERN_PROC_ALL` returns a whole number of records.
@@ -239,7 +239,7 @@ that reads each PID separately, so it is the one where some rows can go missing.
     either.
 - **`spilled: null` waits for v0.3.0.** `write_spill_report_fields` feeds both `hmn spill --json`
   and `hmn watch --json`; turning `false` into `null` is a wire type change. It is written up as
-  [`__reports__/field_check_v0213/02-notice_spilled_null_v0.md`](../__reports__/field_check_v0213/02-notice_spilled_null_v0.md)
+  `field_check_v0213/02-notice_spilled_null_v0.md` at `f03298a7bb`
   and logged under `ROADMAP.md` "Speculative: v0.3.0". The FAQ's "check `measurable` first" stays.
 - **The doc fix is one canonical statement.** The README Limitations bullet says the sandbox
   decides; that unsandboxed, every user's processes are listed; and that inside, `hmn` measures
@@ -284,7 +284,7 @@ README and FAQ text it makes stale, as in v0.2.13. Item 11 covers what remains.
 
 | PR | Contents | Scope items | Notes |
 |---|---|---|---|
-| A | docs only: the dogfooding report, this roadmap, the `ROADMAP.md` entries, `__reports__/field_check_v0213/` | 9, 10, the planning half of 11 | `__reports__/` is dropped at release, as `f3c6010` did |
+| A | docs only: the dogfooding report, this roadmap, the `ROADMAP.md` entries, `field_check_v0213/` at `f03298a7bb` | 9, 10, the planning half of 11 | the development reports directory is dropped at release, as `f3c6010` did |
 | B | cross-platform fixes and docs, plus the macOS remedy `N protected — re-run outside the sandbox`, pulled forward from item 6 | 1, 2, 5, 7, 8 and their share of 11 | the `sudo` advice and the cross-user claim removed; item 5's silent wrong answer (a failing device dropped without a word, on every platform) stated; `--exit-status` `2` on a partial device failure |
 | C | measuring inside a sandbox | 3, 4, 6 and the rest of 11 | new FFI and new public API, so it gets the adversarial review *Scope* asks for; the remedy text itself is already in B |
 
@@ -309,27 +309,29 @@ docs that describe only its own behaviour.
 
 The fixtures, re-run on the M3 Pro (macOS 26.6.2) on 2026-10-04 against default-feature
 release builds of c1810a5 and PR B, with `sandbox-exec` and the profiles of the campaign's
-harness ([`harness/`](../__reports__/v0214_part1/harness/README.md)). Each part 1 result is a row of
-[`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md); the PR C rows were run on 2026-10-08 the same way, against PR C's release build.
+harness (`v0214_part1/harness/`). Each part 1 result is a row of `v0214_part1/00-findings_v0.md`;
+the PR C rows were run on 2026-10-08 the same way, against PR C's release build. The evidence
+files named below were dropped from the tree with the development reports directory and are
+in the tree at commit `f03298a7bb`.
 
 | Fixture | PR | Result | Evidence |
 |---|---|---|---|
-| the report's profile, PR B's form | B | `hmn ps` exits `2` with `hmn: ps failed to query device 0: … (skipped)` and no table; `--exit-status` exits `2`; `--json` prints nothing | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (4)–(6) |
+| the report's profile, PR B's form | B | `hmn ps` exits `2` with `hmn: ps failed to query device 0: … (skipped)` and no table; `--exit-status` exits `2`; `--json` prints nothing | `v0214_part1/00-findings_v0.md` (4)–(6) |
 | the report's profile, PR C's form: exit `2` with the count and the remedy | C | `hmn ps` exits `2` with no table; `--device 0` and `hmn watch 1` exit `2` with the same denial | `hmn: ps failed to query device 0: process list unreadable (954 refused, none other than the caller's could be read) — re-run outside the sandbox (skipped)` |
 | `same-sandbox` allowed: the job listed **with its bytes**, plus the unreadable count | C | `hmn ps` exits `0` and lists the job at 256 MiB beside `hmn`'s own 16 KiB row; `ps --pid <job> --exit-status` exits `0` | `hmn: 2 GPU processes found (256 MiB committed total; 948 unreadable — re-run outside the sandbox).` |
 | pidinfo denied: names, not `?` | C | `hmn ps --json` lists 28 rows, each with a name, `hmn`'s own row included; exit `0`, no `protected` and no `re-run elevated` in stderr (PR B: 25 rows, 24 nameless) | `hmn: 28 GPU processes found (802 MiB committed total).` |
-| pidinfo denied, the remedy | B | `N protected — re-run outside the sandbox` | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (12) |
-| unsandboxed: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | [`c1810a5/none`](../__reports__/v0214_part1/c1810a5/none/), [`pr_b/none`](../__reports__/v0214_part1/pr_b/none/) |
-| the Codex policy: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | [`harness/CODEX_PIN`](../__reports__/v0214_part1/harness/CODEX_PIN), [`pr_b/C`](../__reports__/v0214_part1/pr_b/C/) |
-| the App Sandbox build, PR B's form | B | `hmn ps` exits `2` with the skip line; `hmn ps --device 0` exits `2` with the `NoGpuSource` text naming Metal | [`app_sandbox/`](../__reports__/v0214_part1/app_sandbox/README.md) |
+| pidinfo denied, the remedy | B | `N protected — re-run outside the sandbox` | `v0214_part1/00-findings_v0.md` (12) |
+| unsandboxed: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | `v0214_part1/c1810a5/none/`, `v0214_part1/pr_b/none/` |
+| the Codex policy: output unchanged | B | `compare.py` identical apart from SPILL/`PAGED` `?` → `n/a` | `v0214_part1/harness/CODEX_PIN`, `v0214_part1/pr_b/C/` |
+| the App Sandbox build, PR B's form | B | `hmn ps` exits `2` with the skip line; `hmn ps --device 0` exits `2` with the `NoGpuSource` text naming Metal | `v0214_part1/app_sandbox/README.md` |
 | the App Sandbox build, PR C's form: exit `2` with the denial line carrying `process list unreadable (` | C | `hmn ps`, `hmn ps --device 0` and `hmn watch 1 --duration 1s --interval 1s` each exit `2`; plain `ps` ends the line with `(skipped)` | `hmn: ps failed to query device 0: process list unreadable (969 refused, none other than the caller's could be read) — re-run outside the sandbox` |
-| the Claude Code sandbox | B | lists normally with both builds (18 processes, exit `0`) | [`claude_code_sandbox/`](../__reports__/v0214_part1/claude_code_sandbox/pr_b.md) |
-| a profile denying only `process-info-ledger` | B | the residual: `0 GPU processes found.`, exit `0`; PR C closes it | [`00-findings_v0.md`](../__reports__/v0214_part1/00-findings_v0.md) (17) |
-| `hmn ps --device 1` | B | `device index 1 out of range (have 1 devices)`, unsandboxed and under the report's profile | [`fixtures/cli.txt`](../__reports__/v0214_part1/fixtures/cli.txt) |
-| `hmn watch 0` | B | no warning | [`fixtures/cli.txt`](../__reports__/v0214_part1/fixtures/cli.txt) |
-| `cargo test --test macos_smoke -- --ignored` | B | 3/3 (2/2 at c1810a5) | [`fixtures/tests.txt`](../__reports__/v0214_part1/fixtures/tests.txt) |
-| the `kinfo_proc` test under Rosetta 2 | B | passes | [`fixtures/tests.txt`](../__reports__/v0214_part1/fixtures/tests.txt) |
-| `tests/cli_ps.rs` on PR B's `macos-latest` CI | B | run 37210951264: `branch=expected` four times, with and without `--exit-status` on both jobs | [`ci_macos_cli_ps.md`](../__reports__/v0214_part1/ci_macos_cli_ps.md) |
+| the Claude Code sandbox | B | lists normally with both builds (18 processes, exit `0`) | `v0214_part1/claude_code_sandbox/pr_b.md` |
+| a profile denying only `process-info-ledger` | B | the residual: `0 GPU processes found.`, exit `0`; PR C closes it | `v0214_part1/00-findings_v0.md` (17) |
+| `hmn ps --device 1` | B | `device index 1 out of range (have 1 devices)`, unsandboxed and under the report's profile | `v0214_part1/fixtures/cli.txt` |
+| `hmn watch 0` | B | no warning | `v0214_part1/fixtures/cli.txt` |
+| `cargo test --test macos_smoke -- --ignored` | B | 3/3 (2/2 at c1810a5) | `v0214_part1/fixtures/tests.txt` |
+| the `kinfo_proc` test under Rosetta 2 | B | passes | `v0214_part1/fixtures/tests.txt` |
+| `tests/cli_ps.rs` on PR B's `macos-latest` CI | B | run 37210951264: `branch=expected` four times, with and without `--exit-status` on both jobs | `v0214_part1/ci_macos_cli_ps.md` |
 | the same policy run directly (profile S0) | C | `hmn ps` and `hmn ps --device 0` exit `2` with the denial line; `hmn watch 1` exits `2` too | `hmn: ps failed to query device 0: process list unreadable (953 refused, none other than the caller's could be read) — re-run outside the sandbox` |
 | a profile denying only `process-info-ledger` (profile L), PR C's form | C | exit `2` with the denial line, where PR B exited `0` with `0 GPU processes found.`: the caller's own ledger read is denied too | `hmn: ps failed to query device 0: process list unreadable (940 refused, none other than the caller's could be read) — re-run outside the sandbox` |
 | the lib tests under Rosetta 2 | C | 118 passed, 0 failed, natively as well (95 on PR B) | `test result: ok. 118 passed; 0 failed` |
@@ -439,10 +441,10 @@ Decided on 2026-10-03 while splitting the work into PRs; these are not from the 
 - `Cargo.toml` bumped to `0.2.14`; this roadmap's status and the dogfooding report's `Status`
   flipped, per the dogfooding style guide.
 - The README's "what's new" banner rotated: 🆕 `0.2.14`, `0.2.13` to 🚀, `0.2.11` dropped.
-- `__reports__/` dropped from the tree before the merge, as in `f3c6010`; it stays in history.
+- The development reports directory dropped from the tree before the merge, as in `f3c6010`; it stays in history.
   Each link into it from `docs/` and `ROADMAP.md` becomes a plain mention of the file name and
   the SHA of the commit that last held it, so no link is left pointing at a deleted file.
-  Since PR B, `Cargo.toml` excludes `__reports__/` from the package, so a release cut before
+  Since PR B, `Cargo.toml` excludes that directory from the package, so a release cut before
   the drop does not ship it.
 
 ---
@@ -451,7 +453,7 @@ Decided on 2026-10-03 while splitting the work into PRs; these are not from the 
 
 - [`docs/dogfooding-feedbacks/dogfooding-macos-sandbox-eperm-and-device-bounds.md`](dogfooding-feedbacks/dogfooding-macos-sandbox-eperm-and-device-bounds.md)
   — the report this release implements.
-- [`__reports__/field_check_v0213/`](../__reports__/field_check_v0213/) — the findings, evidence,
+- `field_check_v0213/` at `f03298a7bb` — the findings, evidence,
   probes and the `spilled` notice.
 - [`docs/roadmap-v0.2.13.md`](roadmap-v0.2.13.md) — `process_exists`, `--exit-status`, and the
   decision to skip a failing device when `--device` is not given.

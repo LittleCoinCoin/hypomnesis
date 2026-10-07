@@ -58,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (pre-`WDDM 2.0`, a non-NVIDIA adapter, a `PDH` hiccup, a build without `pdh`). The platform is
   decided at compile time through one core, `format::spill_cell_for`, that both cells share.
   Text output only: `--json` keeps `null`. From the v0.2.13 macOS field check, finding F6
-  ([`__reports__/field_check_v0213/01-findings_v1.md`](__reports__/field_check_v0213/01-findings_v1.md)).
+  (`field_check_v0213/01-findings_v1.md` at `f03298a7bb`).
 
 - **On macOS, `hmn ps` and `hmn watch` advise `re-run outside the sandbox`, not elevation**
   (`src/bin/hmn/format.rs`, `ps.rs`, `watch.rs`, `main.rs`) — the `hmn ps` summary's clause
@@ -66,13 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `re-run outside the sandbox to identify`, where both advised an elevation that does not change
   what a macOS sandbox withholds. One compile-time selection, `format::remedy_text`, picks the
   text; the Windows and Linux text is unchanged, byte for byte. From the
-  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md).
+  v0.2.13 macOS field check (`field_check_v0213/01-findings_v1.md` at `f03298a7bb`).
 
 - **On macOS the sandbox, not process ownership, decides what `hmn` can read** (`README.md`,
   `docs/FAQ.md`, `ROADMAP.md`, rustdoc, `hmn --help`) — unsandboxed, `hmn ps` lists every user's
   processes with no elevation, so no macOS text advises `sudo`; README Limitations item 9 states
   what a sandbox refuses and what `hmn ps` then prints.
-  From the [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md),
+  From the v0.2.13 macOS field check (`field_check_v0213/01-findings_v1.md` at `f03298a7bb`),
   F1.
 
 - **On macOS, `gpu_processes` returns an error where it returned an empty list**
@@ -94,7 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NoGpuSource`. The answer also holds in a sandbox that denies `process-info*`, since the Metal
   count comes from `sysctl`. On macOS the `NoGpuSource` text now names Metal, NVML and
   `nvidia-smi`; on Windows and Linux it is unchanged. From the
-  [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md), F2.
+  v0.2.13 macOS field check (`field_check_v0213/01-findings_v1.md` at `f03298a7bb`), F2.
 
 - **`hmn ps` states each device it skipped, and exits `2` when every device failed**
   (`src/bin/hmn/ps.rs`, `main.rs`) — without `--device`, a device whose query fails now prints

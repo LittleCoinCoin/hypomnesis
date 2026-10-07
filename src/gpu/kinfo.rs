@@ -30,7 +30,7 @@
 //!   untested hardware).
 //!
 //! The measurements are in
-//! `__reports__/field_check_v0213/evidence/kinfo_proc_layout.md`.
+//! `field_check_v0213/evidence/kinfo_proc_layout.md` at `f03298a7bb`.
 
 /// `sizeof(struct kinfo_proc)`, in bytes.
 pub(super) const KINFO_PROC_SIZE: usize = 648;
