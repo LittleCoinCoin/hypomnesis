@@ -43,6 +43,7 @@ graph TD
 | A5 | 2026-10-07 | `__reports__/v0214_roadmap/10-amendment_a5_main_rebase_v0.md` | [] (the four PR C leaves revised) | PR B merged as b716087 after its review (A4): base, symbols, test idiom, counts and befores re-measured on main; `KERN_PROC_ALL` record-size guard, same-boot compare base, fail-not-skip sandbox test |
 | A6 | 2026-10-07 | `__reports__/v0214_roadmap/11-amendment_a6_kinfo_reviews_v0.md` | [] (kinfo_enumeration revised) | Its three reviews found FFI paths no test reaches: a pure `classify_kinfo_all` + bounded `fill_kinfo_all_with`, `comm_from_lookup`, `pidpath_failure` tests, non-vacuous harness scripts, exact `None` docs |
 | A7 | 2026-10-07 | `__reports__/v0214_roadmap/12-amendment_a7_gpl_reviews_v0.md` | [] (gpu_process_listing revised) | Its reviews found mutants no CI test catches: a denied PID off macOS (vacuous no-GPU test), a fake unsandboxed denial, a remedy in `Display` past a word list, a truncating count; byte-for-byte `Display`, a helper test, an awk pin, stale comments |
+| A8 | 2026-10-07 | `__reports__/v0214_roadmap/13-amendment_a8_pwu_reviews_v0.md` | [] (ps_watch_unreadable revised) | Its reviews found mutants no cargo test catches: a doubled remedy on the skip line, `accept`'s branches, `explicit = false` in watch, a count without its remedy; whole-line matches, a pure `branch`, stricter gate greps, exact `--help` |
 
 ## Progress
 | Node | Branch | Commits | Notes |
