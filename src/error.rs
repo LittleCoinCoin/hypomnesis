@@ -107,7 +107,7 @@ pub enum HypomnesisError {
     /// `denied` is the number of processes refused, the caller excluded,
     /// saturating at `u32::MAX`.
     #[error(
-        "process list unreadable: {denied} refused, none other than the caller's could be read"
+        "process list unreadable ({denied} refused, none other than the caller's could be read)"
     )]
     ProcessListDenied {
         /// How many processes' GPU memory the caller was refused.
@@ -156,7 +156,7 @@ mod tests {
         let text = HypomnesisError::ProcessListDenied { denied: 908 }.to_string();
         assert_eq!(
             text,
-            "process list unreadable: 908 refused, none other than the caller's could be read"
+            "process list unreadable (908 refused, none other than the caller's could be read)"
         );
     }
 }

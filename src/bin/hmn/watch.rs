@@ -18,7 +18,7 @@ use hypomnesis::{
 use crate::format::{
     REMEDY_OUTSIDE_SANDBOX, RemedyPurpose, Table, device_name_suffix, duration_ms, failure_detail,
     format_vram, format_vram_precise, iso8601_utc_millis, json_string, json_string_or_null,
-    json_value_or_null, paged_cell, remedy_text, spill_cell,
+    json_value_or_null, paged_cell, remedy_text, spill_cell, with_remedy,
 };
 use crate::ps::{
     PsRow, SortKey, filterable_name, footprint_bytes, matches_any, paged_verdict,
@@ -1003,9 +1003,9 @@ fn denied_pid_notices(explicit: &[u32], denied: &[u32], outside_sandbox: bool) -
         .iter()
         .filter(|pid| denied.contains(pid))
         .map(|pid| {
-            format!(
-                "hmn watch: pid={pid} is unreadable here; its rows will read 0 MiB — {}",
-                remedy_text(outside_sandbox, RemedyPurpose::Names)
+            with_remedy(
+                &format!("hmn watch: pid={pid} is unreadable here; its rows will read 0 MiB"),
+                outside_sandbox,
             )
         })
         .collect()

@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `main.rs`) — the summary line reads `907 unreadable, 1 protected — re-run outside the
   sandbox` (one remedy for both counts; with nothing protected, `907 unreadable — re-run
   outside the sandbox`), and a refused process list is a failed device: `hmn: ps failed to query
-  device 0: process list unreadable: N refused, none other than the caller's could be read —
+  device 0: process list unreadable (N refused, none other than the caller's could be read) —
   re-run outside the sandbox` (` (skipped)` appended without `--device`), where a sandbox that
   denies only the ledger read printed `0 GPU processes found.`. `--pid N` counts only N among the
   refused processes, and `--exit-status` exits `2`, not `1`, for an empty listing in which a
@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--follow-new` prints `hmn watch: device D: N unreadable — re-run outside the sandbox; they
   are not followed` once, and when nothing was selected, `found no GPU processes` carries the same
   count and remedy inside its parentheses, so the line says why. A refused
-  process list at attach is `hmn: watch failed to query device D: process list unreadable: … —
+  process list at attach is `hmn: watch failed to query device D: process list unreadable (…) —
   re-run outside the sandbox`; the per-interval `sample failed` line repeats no remedy. On
   Windows and Linux no process is ever refused, so none of these lines appears.
 

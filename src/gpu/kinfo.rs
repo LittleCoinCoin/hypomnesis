@@ -91,7 +91,7 @@ pub(super) struct KinfoRecord {
 
 /// What one `KERN_PROC_ALL` fill said.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum KinfoAttempt {
+pub(super) enum KernProcAllAttempt {
     /// The call succeeded with these records.
     Records(Vec<KinfoRecord>),
     /// The call failed with `ENOMEM`: the table outgrew the buffer.
@@ -214,17 +214,22 @@ pub(super) fn classify_kern_proc_pid(
 /// be parsed. `ENOMEM` is `Retry`, any other `errno` is `Failed`. On success
 /// the first `len` bytes must be whole records (`len` past the buffer, or a
 /// partial record, is `Failed`).
-pub(super) fn classify_kinfo_all(rc: i32, errno: i32, buf: &[u8], len: usize) -> KinfoAttempt {
+pub(super) fn classify_kern_proc_all(
+    rc: i32,
+    errno: i32,
+    buf: &[u8],
+    len: usize,
+) -> KernProcAllAttempt {
     if rc != 0 {
         return if errno == ENOMEM {
-            KinfoAttempt::Retry
+            KernProcAllAttempt::Retry
         } else {
-            KinfoAttempt::Failed
+            KernProcAllAttempt::Failed
         };
     }
     buf.get(..len)
         .and_then(parse_kinfo_records)
-        .map_or(KinfoAttempt::Failed, KinfoAttempt::Records)
+        .map_or(KernProcAllAttempt::Failed, KernProcAllAttempt::Records)
 }
 
 /// Decide whether a PID exists: `proc_pidpath` first, then `sysctl`
@@ -408,12 +413,12 @@ mod tests {
     }
 
     #[test]
-    fn classify_kinfo_all_whole_records_with_rc_zero_are_records() {
+    fn classify_kern_proc_all_whole_records_with_rc_zero_are_records() {
         let mut two = record(1, b"launchd");
         two.extend_from_slice(&record(77, b"WindowServer"));
         assert_eq!(
-            classify_kinfo_all(0, 0, &two, 1296),
-            KinfoAttempt::Records(vec![
+            classify_kern_proc_all(0, 0, &two, 1296),
+            KernProcAllAttempt::Records(vec![
                 KinfoRecord {
                     pid: 1,
                     comm: b"launchd".to_vec()
@@ -426,8 +431,8 @@ mod tests {
         );
         // Only the first `len` bytes are records.
         assert_eq!(
-            classify_kinfo_all(0, 0, &two, 648),
-            KinfoAttempt::Records(vec![KinfoRecord {
+            classify_kern_proc_all(0, 0, &two, 648),
+            KernProcAllAttempt::Records(vec![KinfoRecord {
                 pid: 1,
                 comm: b"launchd".to_vec()
             }])
@@ -435,34 +440,52 @@ mod tests {
     }
 
     #[test]
-    fn classify_kinfo_all_enomem_is_retry_even_when_the_buffer_holds_records() {
+    fn classify_kern_proc_all_enomem_is_retry_even_when_the_buffer_holds_records() {
         // A short fill copies the whole records that fit, then fails with
         // `ENOMEM` and writes back a `len` of 0: never parsed.
         let mut two = record(1, b"launchd");
         two.extend_from_slice(&record(77, b"WindowServer"));
-        assert_eq!(classify_kinfo_all(-1, 12, &two, 0), KinfoAttempt::Retry);
-        assert_eq!(classify_kinfo_all(-1, 12, &two, 1296), KinfoAttempt::Retry);
+        assert_eq!(
+            classify_kern_proc_all(-1, 12, &two, 0),
+            KernProcAllAttempt::Retry
+        );
+        assert_eq!(
+            classify_kern_proc_all(-1, 12, &two, 1296),
+            KernProcAllAttempt::Retry
+        );
     }
 
     #[test]
-    fn classify_kinfo_all_a_failed_call_other_than_enomem_is_failed() {
+    fn classify_kern_proc_all_a_failed_call_other_than_enomem_is_failed() {
         let zeroed = [0_u8; 648];
         // `EPERM`, `ESRCH` and `EINVAL`.
         assert_eq!(
-            classify_kinfo_all(-1, 1, &zeroed, 648),
-            KinfoAttempt::Failed
+            classify_kern_proc_all(-1, 1, &zeroed, 648),
+            KernProcAllAttempt::Failed
         );
-        assert_eq!(classify_kinfo_all(-1, 3, &zeroed, 0), KinfoAttempt::Failed);
-        assert_eq!(classify_kinfo_all(-1, 22, &zeroed, 0), KinfoAttempt::Failed);
+        assert_eq!(
+            classify_kern_proc_all(-1, 3, &zeroed, 0),
+            KernProcAllAttempt::Failed
+        );
+        assert_eq!(
+            classify_kern_proc_all(-1, 22, &zeroed, 0),
+            KernProcAllAttempt::Failed
+        );
     }
 
     #[test]
-    fn classify_kinfo_all_an_unusable_success_is_failed() {
+    fn classify_kern_proc_all_an_unusable_success_is_failed() {
         let one = record(1, b"launchd");
         // A `len` past the buffer.
-        assert_eq!(classify_kinfo_all(0, 0, &one, 1296), KinfoAttempt::Failed);
+        assert_eq!(
+            classify_kern_proc_all(0, 0, &one, 1296),
+            KernProcAllAttempt::Failed
+        );
         // A partial record.
-        assert_eq!(classify_kinfo_all(0, 0, &one, 647), KinfoAttempt::Failed);
+        assert_eq!(
+            classify_kern_proc_all(0, 0, &one, 647),
+            KernProcAllAttempt::Failed
+        );
     }
 
     #[test]

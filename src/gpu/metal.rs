@@ -39,9 +39,9 @@ use core::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 
 use super::kinfo::{
-    self, CTL_KERN, KERN_PROC, KERN_PROC_ALL, KERN_PROC_PID, KINFO_PROC_SIZE, KinfoAttempt,
-    KinfoRecord, PathLookup, PidLookup, classify_kern_proc_pid, classify_kinfo_all, decide_exists,
-    parse_kinfo_records,
+    self, CTL_KERN, KERN_PROC, KERN_PROC_ALL, KERN_PROC_PID, KINFO_PROC_SIZE, KernProcAllAttempt,
+    KinfoRecord, PathLookup, PidLookup, classify_kern_proc_all, classify_kern_proc_pid,
+    decide_exists, parse_kinfo_records,
 };
 
 /// libSystem FFI declarations for the macOS GPU backend.
@@ -746,12 +746,7 @@ fn kern_proc_pid_raw(pid: i32) -> (i32, i32, [u8; KINFO_PROC_SIZE], usize) {
         )
     };
     // Read `errno` before any other call can clobber it.
-    let errno = if rc == 0 {
-        0
-    } else {
-        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-    };
-    (rc, errno, buf, len)
+    (rc, errno_after(rc), buf, len)
 }
 
 /// What `sysctl` `KERN_PROC_PID` says about `pid`.
@@ -881,6 +876,20 @@ fn last_errno() -> Option<i32> {
     std::io::Error::last_os_error().raw_os_error()
 }
 
+/// The `errno` for `classify_*`, which takes it as an `i32`: `0` when the
+/// call just made returned `rc == 0`, else the `errno` it left, `0` when it
+/// left none.
+///
+/// Call it first after the `sysctl`, before anything else can overwrite
+/// `errno`.
+fn errno_after(rc: i32) -> i32 {
+    if rc == 0 {
+        0
+    } else {
+        last_errno().unwrap_or(0)
+    }
+}
+
 /// List every PID with `proc_listpids`.
 ///
 /// Two phases: query the buffer size first, then fill. The PID count may
@@ -939,15 +948,24 @@ fn list_libproc_pids() -> LibprocPids {
     libproc_outcome(written_bytes, None, pids)
 }
 
+/// How many probe-and-fill attempts [`list_kern_proc_all`] makes before it
+/// gives up on a process table that keeps outgrowing its buffer.
+const KERN_PROC_ALL_MAX_ATTEMPTS: usize = 4;
+
+/// The divisor of the slack [`kern_proc_all_buffer_len`] adds to the probed
+/// length: one `KERN_PROC_ALL_SLACK_DIVISOR`th of it.
+const KERN_PROC_ALL_SLACK_DIVISOR: usize = 8;
+
 /// The buffer length for the `KERN_PROC_ALL` fill, given the `probed`
-/// length: `probed` plus 1/8 slack, rounded up to a whole number of
-/// `KINFO_PROC_SIZE` records and never zero.
+/// length: `probed` plus `probed / KERN_PROC_ALL_SLACK_DIVISOR` slack,
+/// rounded up to a whole number of `KINFO_PROC_SIZE` records and never
+/// zero.
 ///
-/// The kernel's probe already counts five spare records; the 1/8 covers
+/// The kernel's probe already counts five spare records; the slack covers
 /// a table that grows faster than that between the probe and the fill.
-fn kinfo_all_buffer_len(probed: usize) -> usize {
+fn kern_proc_all_buffer_len(probed: usize) -> usize {
     probed
-        .saturating_add(probed / 8)
+        .saturating_add(probed / KERN_PROC_ALL_SLACK_DIVISOR)
         .div_ceil(KINFO_PROC_SIZE)
         .max(1)
         .saturating_mul(KINFO_PROC_SIZE)
@@ -957,18 +975,19 @@ fn kinfo_all_buffer_len(probed: usize) -> usize {
 ///
 /// The records come through [`parse_kinfo_records`], the parser
 /// `KERN_PROC_PID` uses. Each attempt is a probe with a null buffer, which
-/// gives the length, then a fill into a buffer of [`kinfo_all_buffer_len`]
-/// bytes, judged by [`classify_kinfo_all`]. A fill that fails with `ENOMEM`
-/// (the table outgrew the buffer) is tried again, 4 attempts in all. A
+/// gives the length, then a fill into a buffer of [`kern_proc_all_buffer_len`]
+/// bytes, judged by [`classify_kern_proc_all`]. A fill that fails with `ENOMEM`
+/// (the table outgrew the buffer) is tried again, up to
+/// `KERN_PROC_ALL_MAX_ATTEMPTS` attempts in all. A
 /// failed call, including a refusal, is `None`; its buffer and `len` are
 /// never read.
 #[allow(unsafe_code)]
-fn list_kinfo_all() -> Option<Vec<KinfoRecord>> {
+fn list_kern_proc_all() -> Option<Vec<KinfoRecord>> {
     let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_ALL];
     // CAST: usize → u32, a 3-element MIB; fits.
     #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
     let namelen = mib.len() as u32;
-    for _ in 0..4 {
+    for _ in 0..KERN_PROC_ALL_MAX_ATTEMPTS {
         let mut probed: usize = 0;
         // SAFETY: `mib` holds the `namelen` ints; `oldp` is null, which
         // asks the kernel to write the length it would return into
@@ -987,7 +1006,7 @@ fn list_kinfo_all() -> Option<Vec<KinfoRecord>> {
         if rc != 0 {
             return None;
         }
-        let mut buf = vec![0_u8; kinfo_all_buffer_len(probed)];
+        let mut buf = vec![0_u8; kern_proc_all_buffer_len(probed)];
         let mut len = buf.len();
         // SAFETY: `mib` holds the `namelen` ints; `buf` is valid for
         // `len` bytes, and `len` is in/out (the kernel writes back how
@@ -1004,16 +1023,11 @@ fn list_kinfo_all() -> Option<Vec<KinfoRecord>> {
             )
         };
         // Read `errno` before any other call can clobber it.
-        let errno = if rc == 0 {
-            0
-        } else {
-            last_errno().unwrap_or(0)
-        };
-        match classify_kinfo_all(rc, errno, &buf, len) {
-            KinfoAttempt::Records(records) => return Some(records),
+        match classify_kern_proc_all(rc, errno_after(rc), &buf, len) {
+            KernProcAllAttempt::Records(records) => return Some(records),
             // EXPLICIT: the table outgrew the buffer; probe and fill again.
-            KinfoAttempt::Retry => {}
-            KinfoAttempt::Failed => return None,
+            KernProcAllAttempt::Retry => {}
+            KernProcAllAttempt::Failed => return None,
         }
     }
     None
@@ -1045,7 +1059,7 @@ fn list_pids() -> Option<Vec<i32>> {
     match list_libproc_pids() {
         LibprocPids::Pids(pids) => Some(pids),
         LibprocPids::Refused => {
-            let records = trust_kinfo_listing(list_kinfo_all(), self_lookup)?;
+            let records = trust_kinfo_listing(list_kern_proc_all(), self_lookup)?;
             Some(records.into_iter().map(|record| record.pid).collect())
         }
         LibprocPids::Failed => None,
@@ -1469,8 +1483,8 @@ mod tests {
     }
 
     #[test]
-    fn list_kinfo_all_holds_this_process() {
-        let listing = list_kinfo_all();
+    fn list_kern_proc_all_holds_this_process() {
+        let listing = list_kern_proc_all();
         if listing.is_none() && last_errno() == Some(kinfo::EPERM) {
             let _ = writeln!(
                 std::io::stderr().lock(),

@@ -193,6 +193,17 @@ pub fn remedy_text(outside_sandbox: bool, purpose: RemedyPurpose) -> String {
     text.to_owned()
 }
 
+/// `text`, then ` — ` and the remedy for [`RemedyPurpose::Names`]: the one
+/// join every line that ends in a remedy goes through, so the separator,
+/// the purpose and the order are spelled once.
+#[must_use]
+pub fn with_remedy(text: &str, outside_sandbox: bool) -> String {
+    format!(
+        "{text} — {}",
+        remedy_text(outside_sandbox, RemedyPurpose::Names)
+    )
+}
+
 /// The text `hmn ps` and `hmn watch` print for a failed device query: the
 /// error's `Display`, with ` — ` and [`remedy_text`] for
 /// [`RemedyPurpose::Names`] appended when the error is
@@ -203,10 +214,7 @@ pub fn remedy_text(outside_sandbox: bool, purpose: RemedyPurpose) -> String {
 #[must_use]
 pub fn failure_detail(e: &HypomnesisError, outside_sandbox: bool) -> String {
     if matches!(e, HypomnesisError::ProcessListDenied { .. }) {
-        format!(
-            "{e} — {}",
-            remedy_text(outside_sandbox, RemedyPurpose::Names)
-        )
+        with_remedy(&e.to_string(), outside_sandbox)
     } else {
         e.to_string()
     }
@@ -736,7 +744,7 @@ mod tests {
     fn failure_detail_appends_the_remedy_to_a_denial_only() {
         assert_eq!(
             failure_detail(&HypomnesisError::ProcessListDenied { denied: 908 }, true),
-            "process list unreadable: 908 refused, none other than the caller's could be read \
+            "process list unreadable (908 refused, none other than the caller's could be read) \
              — re-run outside the sandbox"
         );
         assert_eq!(

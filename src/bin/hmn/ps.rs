@@ -15,8 +15,8 @@ use hypomnesis::{
 };
 
 use crate::format::{
-    REMEDY_OUTSIDE_SANDBOX, RemedyPurpose, Table, failure_detail, format_vram, format_vram_precise,
-    json_string_or_null, json_value_or_null, remedy_text, spill_cell,
+    REMEDY_OUTSIDE_SANDBOX, Table, failure_detail, format_vram, format_vram_precise,
+    json_string_or_null, json_value_or_null, spill_cell, with_remedy,
 };
 
 /// One row of `hmn ps` output (binary-internal — not part of the
@@ -262,11 +262,19 @@ impl PsFilters {
         }
     }
 
+    /// Whether `--pid` admits `pid`: every PID when none was given, else
+    /// the ones named. The one `--pid` test, shared by [`Self::judge`] and
+    /// [`Self::relevant_denied`].
+    #[must_use]
+    fn pid_selected(&self, pid: u32) -> bool {
+        self.pids.is_empty() || self.pids.contains(&pid)
+    }
+
     /// Judge a process on an already-selected device against the
     /// row-level filters (`--pid`, `--min`, then `--filter`).
     #[must_use]
     pub fn judge(&self, entry: &GpuProcessEntry) -> PsJudgement {
-        let size_and_pid = (self.pids.is_empty() || self.pids.contains(&entry.pid))
+        let size_and_pid = self.pid_selected(entry.pid)
             && self.min_bytes.is_none_or(|min| {
                 footprint_bytes(entry.used_bytes, entry.shared_used_bytes) >= min
             });
@@ -286,15 +294,10 @@ impl PsFilters {
     /// How many of the `denied` PIDs a listing with these filters could
     /// have held: every one without `--pid`, else the ones `--pid` names.
     /// A denied process's size and name are unknown, so `--min` and
-    /// `--filter` cannot exclude it; this is [`Self::judge`]'s `--pid` test
-    /// and nothing else.
+    /// `--filter` cannot exclude it.
     #[must_use]
     pub fn relevant_denied(&self, denied: &[u32]) -> usize {
-        if self.pids.is_empty() {
-            denied.len()
-        } else {
-            denied.iter().filter(|pid| self.pids.contains(pid)).count()
-        }
+        denied.iter().filter(|&&pid| self.pid_selected(pid)).count()
     }
 
     /// The summary line's filter clauses (`pid=N[,N…]`, `device=M`,
@@ -591,8 +594,8 @@ pub fn run_ps(filters: &PsFilters, sort: SortKey, json: bool, exit_status: bool)
 /// The parenthetical's remedy clause, or `None` when nothing is counted:
 /// `N unreadable` (processes the caller was refused) and `M protected`
 /// (rows whose name could not be resolved), each present only when
-/// non-zero, joined by `, `, then ` — ` and one [`remedy_text`] for
-/// [`RemedyPurpose::Names`]. On Windows and Linux only `M protected —
+/// non-zero, joined by `, `, then ` — ` and the one remedy
+/// ([`with_remedy`]). On Windows and Linux only `M protected —
 /// re-run elevated for names` can occur; on macOS the one remedy,
 /// `re-run outside the sandbox`, covers both counts.
 #[must_use]
@@ -607,11 +610,7 @@ pub fn remedy_clause(protected: usize, unreadable: usize, outside_sandbox: bool)
     if counts.is_empty() {
         return None;
     }
-    Some(format!(
-        "{} — {}",
-        counts.join(", "),
-        remedy_text(outside_sandbox, RemedyPurpose::Names)
-    ))
+    Some(with_remedy(&counts.join(", "), outside_sandbox))
 }
 
 /// Build the stderr summary string for `hmn ps`. Format:
@@ -621,8 +620,7 @@ pub fn remedy_clause(protected: usize, unreadable: usize, outside_sandbox: bool)
 /// by `, `, then ` — <remedy>`; see [`remedy_clause`]) and `<K> unnamed not
 /// matched` apply, where `<remedy>` is `re-run elevated for names`
 /// (Windows, Linux) or `re-run outside the sandbox` (macOS,
-/// `outside_sandbox == true`), as [`remedy_text`] words it for
-/// [`RemedyPurpose::Names`].
+/// `outside_sandbox == true`), as [`with_remedy`] words it.
 ///
 /// Three appendices after the noun, each elided when not applicable:
 ///

@@ -57,7 +57,7 @@ fn skipped_device_line(stderr: &str, text: &str) -> bool {
 
 /// The start of `HypomnesisError::ProcessListDenied`'s `Display`, and so of
 /// the detail a denied device's skip line carries.
-const DENIAL_TEXT: &str = "process list unreadable:";
+const DENIAL_TEXT: &str = "process list unreadable (";
 
 /// The start of `HypomnesisError::NoGpuSource`'s `Display`, the same on
 /// every platform before its list of backends.
