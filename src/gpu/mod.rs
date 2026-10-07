@@ -379,9 +379,17 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 #[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
 pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
     // Metal is the macOS primary source: per-PID ledger reads of
-    // `graphics_footprint` over `proc_listpids`: every process the
-    // caller's sandbox lets it read; a refused `proc_listpids` falls
-    // through to `NoGpuSource`.
+    // `graphics_footprint` over `proc_listpids`, or over
+    // `sysctl(KERN_PROC_ALL)` when libproc is refused: every process the
+    // caller's sandbox lets it read. The bridge returns `None`, and the listing
+    // falls through to `NoGpuSource`, when `device_index` is not 0, when
+    // `proc_listpids` fails without being refused (an `errno` other than
+    // `EPERM`, no `errno`, a size too small for one PID, or a success that
+    // lists no positive PID), when it is refused and `KERN_PROC_ALL` is
+    // refused, fails or is distrusted by the record-size guard, when the ledger
+    // entry index did not resolve, when no other process was read, none was
+    // refused and at least one failed, or when the sandbox denied the read of
+    // every process but the caller.
     #[cfg(all(target_os = "macos", feature = "metal"))]
     if let Some(mut rows) = metal::list_compute_processes(device_index) {
         sort_by_pid(&mut rows);
