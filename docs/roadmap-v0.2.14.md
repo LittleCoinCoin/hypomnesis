@@ -23,7 +23,7 @@ fields land in patch releases. Type-shape changes … are minor bumps, never pat
   where spill cannot exist, an `unreadable` part on the `hmn ps` summary line, and a
   platform-correct remedy in place of "re-run elevated" on macOS.
 
-Four behaviour changes are deliberate. Each turns a silent wrong answer into a stated one:
+Five behaviour changes are deliberate. Each turns a silent wrong answer into a stated one:
 
 - `gpu_processes` returns an error, not an empty list, when the process list was enumerated but
   no process other than the caller's could be read;
@@ -32,7 +32,10 @@ Four behaviour changes are deliberate. Each turns a silent wrong answer into a s
 - `hmn ps --exit-status` exits `2` ("can't tell") rather than `1` ("nothing matched") when nothing
   is listed and some processes could not be read;
 - `hmn ps --exit-status` also exits `2`, not `1`, when nothing is listed and a
-  tried device failed.
+  tried device failed;
+- `gpu_processes` returns `NoGpuSource`, not an empty list, when the `graphics_footprint`
+  template index does not resolve, so `hmn ps` exits `2` on such a host, unsandboxed included,
+  where v0.2.13 prints `0 GPU processes found.` and exits `0`.
 
 One request is **not** in this release: making the JSON `spilled` field `null` when spill is not
 measurable. It changes a `bool` into a `bool` or `null` on the wire, a type-shape change, so it
@@ -125,11 +128,15 @@ that reads each PID separately, so it is the one where some rows can go missing.
 
   Neither source alone covers every caller: Codex's policy refuses `kern.proc.all` and allows
   libproc, while an explicit deny does the reverse. Because libproc answers first, every case that
-  works today, unsandboxed and under Codex, keeps byte-identical output.
+  works today, unsandboxed and under Codex, keeps byte-identical output, except on a host whose
+  ledger template lacks the `graphics_footprint` entry, which the fifth deliberate change in
+  *Why v0.2.14* covers.
 
   One private helper reads `kinfo_proc` records as `[u8; 648]` with named offsets. It needs no
   `libc` dependency, checks that the length is a whole number of records, and takes `p_comm` from
-  the record, so the enumeration fallback gets names in the same pass. Record parsing and errno
+  the record. The enumeration fallback keeps only each record's PID; a name is read per row, from
+  `proc_pidpath` and, where that is refused, from the `p_comm` of the PID's own `KERN_PROC_PID`
+  record. Record parsing and errno
   classification are pure functions with unit tests, the way `proc_name.rs` tests its own; the
   sandbox paths cannot be unit-tested any other way.
 - **The 648-byte `kinfo_proc` layout, and where it was checked.** Measured 2026-10-02 on the M3
@@ -147,15 +154,20 @@ that reads each PID separately, so it is the one where some rows can go missing.
   - Not verified: a native Intel Mac.
     Rosetta 2 runs x86_64 userland on the arm64 kernel, so it cannot show what an
     Intel kernel returns, and `ROADMAP.md` lists Apple Metal on Intel Macs as untested hardware
-    (Principle 3, no Intel-Mac test hardware). This release changes neither, so two guards stand
-    against a layout that differs: the whole-records length check and the PID cross-check. A
-    record larger than 648 bytes does not fit the buffer, so `sysctl` fails with `ENOMEM`, which
-    reads as "can't tell".
-- **A per-PID read has four outcomes, not two.** `read_graphics_footprint` stops folding
-  everything into `None`. It returns bytes; *denied* (`EPERM`); *gone* (`ESRCH`); or
-  *unavailable*, when the `graphics_footprint` template index did not resolve. *Unavailable*, or
-  both enumerations refused, makes the backend return `None`. The dispatcher then falls through
-  to `NoGpuSource`, as for every other backend, instead of today's silent empty list.
+    (Principle 3, no Intel-Mac test hardware). This release changes neither, so three guards stand
+    against a layout that differs: the whole-records length check and the PID cross-check, as
+    before, and a check of the caller's own `KERN_PROC_PID` record before a `KERN_PROC_ALL`
+    listing is trusted. A record larger than 648 bytes does not fit `KERN_PROC_PID`'s
+    one-record buffer, so `sysctl` fails with `ENOMEM`, which reads as "can't tell". A
+    probe-sized `KERN_PROC_ALL` buffer takes whole records of any size, so the whole-records
+    check alone would pass such a listing whenever its total is a multiple of 648.
+- **A per-PID read has five outcomes, not two.** `read_graphics_footprint` stops folding
+  everything into `None`. It returns bytes; *denied* (`EPERM`); *gone* (`ESRCH`); *failed*, for
+  any other errno or a reply it cannot use; or *unavailable*, when the `graphics_footprint`
+  template index did not resolve. *Unavailable*, both enumerations refused, or a listing where no
+  other process was read, none was refused and at least one failed, makes the backend return
+  `None`. The dispatcher then falls through to `NoGpuSource`, as for every other backend, instead
+  of today's silent empty list.
 - **Names follow the Linux rule literally.** The `p_comm` fallback is used only on `EPERM`, never
   on `ESRCH`, so a PID's name cannot flip between sources and trigger `hmn watch`'s PID-reuse reset
   (`src/bin/hmn/watch.rs:316-327`). A `p_comm` shorter than 16 bytes is exact; one of 16 may be cut

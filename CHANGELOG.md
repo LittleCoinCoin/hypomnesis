@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **macOS enumeration and names inside a sandbox that denies `process-info`**
+  (`src/gpu/metal.rs`) — when `proc_listpids` is refused, `sysctl(KERN_PROC_ALL)`
+  enumerates the processes. A name comes from `proc_pidpath`, and from the kernel's `p_comm`
+  (cut at 16 bytes) only where `proc_pidpath` is refused, never for a process that is gone.
+  A per-PID ledger read is bytes, denied, gone (`ESRCH`) or failed, and only a refusal (`EPERM`)
+  counts as denied. Where libproc works, the output is unchanged.
+
 ### Changed
 
 - **The SPILL and per-PID `PAGED` cells read `n/a` on Linux and macOS** (`src/bin/hmn/format.rs`,

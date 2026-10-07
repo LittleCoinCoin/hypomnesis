@@ -284,11 +284,15 @@ when either shows the full one. An unresolved row means
 `/proc/<pid>/comm` was unreadable — usually a genuine cross-user permission
 wall, not a false one the way Windows' old `OpenProcess`-only path was; run
 as the owning user or with `sudo` to resolve it. On macOS a name is `?`
-when a sandbox withheld `proc_pidpath`; see
-[README Limitations, item 9](../README.md#binary-hmn). Both platforms still
-render an unresolved row as a bare `?` (no `[exited]`/`[protected]` split)
-— there is no equivalent false-wall to collapse there the way there was on
-Windows.
+when the process is gone, when the path lookup fails for a reason other
+than a refusal, or when `proc_pidpath` and `KERN_PROC_PID` are both
+refused or give no usable name (empty, or not UTF-8). Where only the path
+lookup is refused, the name is the kernel's `p_comm`, cut at 16 bytes, so
+`--filter` cannot match past the cut; see
+[README Limitations, item 9](../README.md#binary-hmn). Both platforms
+still render an unresolved row as a bare `?` (no `[exited]`/`[protected]`
+split) — there is no equivalent false-wall to collapse there the way there
+was on Windows.
 
 The distinction is deliberately surfaced because it is security-relevant: a
 `[protected]` row (or, on Linux, a bare `?`) holding substantial `VRAM`

@@ -230,10 +230,12 @@ enum Commands {
         /// Keep only processes whose name contains PATTERN, ignoring
         /// case (`--filter canvas` matches `canvas` and `Canvas.exe`) —
         /// the same rule as `hmn watch --filter`. Repeatable: a name
-        /// matching any one pattern qualifies. A process whose name
-        /// cannot be resolved (`?`, `[protected]`, `[exited]`) cannot
-        /// match; the summary line counts those rather than dropping them
-        /// silently. The patterns are echoed on the summary line.
+        /// matching any one pattern qualifies. On macOS a name read from
+        /// the kernel's `p_comm` is cut at 16 bytes, and a pattern cannot
+        /// match past the cut. A process whose name cannot be resolved
+        /// (`?`, `[protected]`, `[exited]`) cannot match; the summary line
+        /// counts those rather than dropping them silently. The patterns
+        /// are echoed on the summary line.
         #[arg(long = "filter", value_name = "PATTERN", value_parser = parse_filter_pattern)]
         filters: Vec<String>,
         /// Display order: `dedicated` ("who do I kill to free VRAM?",
@@ -392,9 +394,10 @@ enum Commands {
         /// resolve (`[protected]`, `[exited]`) keeps matching on the last
         /// name it resolved to; a process whose name never resolves
         /// cannot match, and is announced once on stderr rather than
-        /// dropped silently. The active patterns appear on the stderr
-        /// header line. Combining this with explicit PID(s) is a hard
-        /// error (exit `2`).
+        /// dropped silently. On macOS a name read from the kernel's
+        /// `p_comm` is cut at 16 bytes, and a pattern cannot match past
+        /// the cut. The active patterns appear on the stderr header line.
+        /// Combining this with explicit PID(s) is a hard error (exit `2`).
         #[arg(long = "filter", value_name = "PATTERN", value_parser = parse_filter_pattern)]
         filters: Vec<String>,
         /// Auto-select mode only: consider only processes whose total

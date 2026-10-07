@@ -170,8 +170,15 @@ pub struct GpuProcessEntry {
     /// told apart. `Some("?")` is also produced on the Windows
     /// `nvidia-smi` fallback path, where `nvidia-smi` itself writes a
     /// literal `?` rather than failing the row. The `[exited]`/
-    /// `[protected]` distinction is Windows-only; Linux/macOS `None`
-    /// rows remain undifferentiated.
+    /// `[protected]` distinction is Windows-only; Linux `None` rows remain
+    /// undifferentiated. On macOS the name is the executable's basename;
+    /// where `proc_pidpath` is refused, it is the kernel's `p_comm`, cut at
+    /// 16 bytes, so a name `--filter` is matched against can be shorter
+    /// than the process's real one and cannot be matched past the cut.
+    /// `None` means no source gave a name: the process is gone, the path
+    /// lookup failed for a reason other than a refusal, or `proc_pidpath`
+    /// was refused and `KERN_PROC_PID` gave no usable name (it was refused
+    /// too, or the name is empty or not UTF-8).
     pub name: Option<String>,
     /// GPU memory used by this process in bytes. On the Windows
     /// [`GpuQuerySource::Pdh`] path this is `VidMm`'s dedicated
