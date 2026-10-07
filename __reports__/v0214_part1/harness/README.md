@@ -8,9 +8,12 @@ that the output a sandbox policy already got right did not change.
 
 | File | Role |
 |:-----|:-----|
-| `sandbox.sh` | `sandbox.sh [--print-profile] PROFILE [--] CMD [ARGS...]`: run `CMD` under a named profile, or print the profile text |
+| `sandbox.sh` | `sandbox.sh [--print-profile] PROFILE [--job] [--] CMD [ARGS...]`: run `CMD` under a named profile, or print the profile text. `--job` starts `gpujob` inside the sandbox and exports its PID as `$JOB`; exit `70` when `gpujob.swift` does not compile or the job does not start |
 | `capture.py` | `python3 capture.py <hmn-binary> <outdir>`: six probes × the policies `none`, `P`, `C`, normalised |
 | `compare.py` | `python3 compare.py <base> <new> [--spill-map]`: compare two capture directories for `none` and `C` |
+| `gpujob.swift` | the resident 256 MiB Metal buffer behind `--job`, compiled into `target/gpujob` on first use |
+| `count_denied.py` | `python3 count_denied.py`: an independent `sysctl` and `ledger` probe, prints `denied=<n> read=<m> gone=<k>` |
+| `compare_names.py` | `python3 compare_names.py <unsandboxed.json> <profile.json>`: the NAME rule over two raw `ps --json` outputs (equal, or cut at 16 bytes) |
 | `codex.sb` | OpenAI Codex's Seatbelt base policy, byte for byte, plus a last line `(allow file-read*)` (Apache-2.0, see *The Codex pin*) |
 | `CODEX_PIN` | the upstream source URL, commit, SHA-256 of `codex.sb` without its last line, and licence |
 
@@ -169,12 +172,14 @@ edited in a scratch copy of `pr_b/none/ps.stdout`, exit 1.
 
 ## Extension points for PR C
 
-- `sandbox.sh`: PR C adds a `--job` option (a resident GPU job inside the sandbox) and its
-  fixtures (`gpujob.swift`, `count_denied.py`) beside this file. In PR B any other option
-  exits 64, so `--job` is an addition to this file, not a second script.
-- `compare.py`: PR C runs it against these captures without `--spill-map`, so PR B's `n/a`
-  cells are its base. An allowlist entry is added to `STDERR_ALLOWLIST` with its reason,
-  and named here, never masked silently.
+- `sandbox.sh`: PR C adds a `--job` option after `PROFILE` (a resident GPU job inside the
+  sandbox, its PID in `$JOB`) and its fixtures beside this file: `gpujob.swift`,
+  `count_denied.py` and `compare_names.py`. `--job` is an addition to this file, not a
+  second script; an unknown profile and a `--job` before `PROFILE` still exit 64.
+- `compare.py`: PR C runs it without `--spill-map` against a b716087 release build captured
+  in the same boot as its own capture, never against these captures: rows are matched by
+  PID, and a reboot since they were taken reassigns PIDs. An allowlist entry
+  is added to `STDERR_ALLOWLIST` with its reason, and named here, never masked silently.
 - `capture.py`: a new probe is a new entry in `capture.py`'s `PROBES` (and in
   `TABLE_PROBES` if it prints the `ps` table) and in `compare.py`'s `PROBES`, and a line in
   this README.
