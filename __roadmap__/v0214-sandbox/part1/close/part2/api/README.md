@@ -15,8 +15,8 @@ Add the additive public API under the names the maintainer fixed (R03), without 
 ## Status
 ```mermaid
 graph TD
-    gpu_process_listing[Item 4: gpu_process_listing and ProcessListDenied]:::inprogress
-    cli[Part 2 CLI]:::planned
+    gpu_process_listing[Item 4: gpu_process_listing and ProcessListDenied]:::done
+    cli[Part 2 CLI]:::inprogress
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -27,8 +27,8 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `gpu_process_listing.md` | 📄 Leaf Task | 🔄 In Progress |
-| `cli/` | 📁 Directory | ⬜ Planned |
+| `gpu_process_listing.md` | 📄 Leaf Task | ✅ Done |
+| `cli/` | 📁 Directory | 🔄 In Progress |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -37,3 +37,4 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `gpu_process_listing.md` | `task/gpu_process_listing` | 3583ad1, e7d6c2d (on 8519f1a; red 38c151b squashed into Step 2, A7 fixes folded in) | Sonnet implementer; doctest gate fixed in the spec (edition-2024 merged doctests, 6177425). Reviews: spec verifier PASS WITH NOTES (API additive only, seam untouched; 1 should-fix), test review PASS WITH NOTES (4 should-fix: a vacuous off-macOS test, no `denied=0` check unsandboxed, `Display` by word list, a saturation input a truncating cast passed). A7 adopted them; the call-site count stops at `mod tests` and the saturation input compiles on 32-bit targets (af92385); the A7 delta verifier PASS WITH NOTES (rustdoc-JSON API diff additive; `ProcessListDenied` count widened to qualified paths, 97f21c9; five docs gained the `denied > 0` condition). Full gate set green per commit, lib 146 native and Rosetta. Residuals for the PR body: the Metal arm's wiring is caught only by the `#[ignore]`d `tests/macos_sandbox.rs`; the off-macOS `ProcessListDenied` invariant only by the awk count; `compile_fail` passes for any compile error on stable. Trailers: `claude-sonnet-5-5`. |
