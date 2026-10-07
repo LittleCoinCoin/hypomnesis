@@ -22,7 +22,7 @@ Every new behaviour is macOS-only by construction. Windows and Linux output stay
 ## Status
 ```mermaid
 graph TD
-    kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::planned
+    kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::inprogress
     api[Part 2 public API]:::planned
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
@@ -34,7 +34,7 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `kinfo_enumeration.md` | 📄 Leaf Task | ⬜ Planned |
+| `kinfo_enumeration.md` | 📄 Leaf Task | 🔄 In Progress |
 | `api/` | 📁 Directory | ⬜ Planned |
 
 ## Amendment Log
