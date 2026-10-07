@@ -68,8 +68,7 @@ Checking the report against the code and the kernel confirmed it, and went furth
 
 - **The cause is in the kernel source.** XNU's `ledger()` (`bsd/kern/sys_generic.c`) returns
   `ESRCH` from `proc_find`, then consults only `mac_proc_check_ledger`, the sandbox's hook. There
-  is no uid check. The crate's own first macOS probe (May 2026, `macos_ledger/00-findings_v0.md`
-  in commit `7045b5c`) had already read WindowServer's ledger unprivileged. "Cross-user needs
+  is no uid check. The crate's own first macOS probe (May 2026) had already read WindowServer's ledger unprivileged. "Cross-user needs
   root" came from `task_for_pid` and was never measured for `ledger`.
 - **The report's mechanism for the silent zero is wrong for its own profile.** Under
   `(deny process-info*)(allow process-info* (target self))` it is **`proc_listpids`** that fails,
@@ -389,8 +388,16 @@ Adopted:
 
 Left as they are: the `--help` text that restates the 16-byte cut for `ps` and for `watch` (the
 crate's help restates rules elsewhere), the exit-code rule's prose copies, which predate this
-release, a shared helper for the two Seatbelt-profile tests in `tests/macos_smoke.rs`, and the
-new `hmn watch` lines, which stay inline in `run_watch`.
+release, a shared helper for the two Seatbelt-profile tests in `tests/macos_smoke.rs`, the new
+`hmn watch` lines, which stay inline in `run_watch`, a table test for the `KERN_PROC_ALL` buffer
+length, the remedy clause's shape restated in `format_ps_summary`'s rustdoc, the second parse of
+one `kinfo_proc` buffer in `kern_proc_pid_comm`, the `proc_pidpath` call shared by two functions,
+and the qualified `kinfo::EPERM`.
+
+The full gate set passes on the final tree: `cargo fmt --check`; clippy with `-D warnings` by
+default, with `--all-features` and for `x86_64-unknown-linux-gnu`; `cargo test --locked
+--all-features` (118 library tests); `cargo doc -D warnings`; `cargo +1.88` check, clippy and
+test; both `--no-default-features` checks; and the library tests under Rosetta 2 (118).
 
 ---
 

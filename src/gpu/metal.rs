@@ -1207,6 +1207,7 @@ pub(super) fn list_processes(device_index: u32) -> Option<MetalProcessList> {
         others_read: tally.others_read,
     })
 }
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
