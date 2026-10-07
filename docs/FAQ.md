@@ -299,8 +299,8 @@ The distinction is deliberately surfaced because it is security-relevant: a
 that *still* doesn't resolve under elevation is one of — another user's
 process, `SYSTEM`, a `PPL`-protected process, or (rarely) the snapshot API
 itself failing — and on a single-user desktop an unexpected one is worth
-investigating. On macOS a bare `?` means a sandbox withheld the name, and
-elevation does not change that; see
+investigating. On macOS a bare `?` means both name lookups failed or the
+process is gone, and elevation does not change that; see
 [README Limitations, item 9](../README.md#binary-hmn). Note that
 **measurement itself never needs elevation**: the `PDH` counters, including
 everything `hmn spill` reads, are readable unprivileged; elevation only
@@ -309,7 +309,10 @@ improves *name resolution*. The
 only true `[protected]`/unresolved rows — `[exited]` rows are deliberately
 excluded, since elevation cannot help a process that has already exited.
 On macOS the clause reads `(N protected — re-run outside the sandbox)`: a
-macOS name is withheld by a sandbox, and elevation does not lift it.
+sandbox withholds the name, and elevation does not lift it. The processes a
+sandbox hides altogether are counted in the same clause as
+`(N unreadable — re-run outside the sandbox)`, joined with the `protected`
+count by a comma when both are non-zero.
 
 A Seatbelt profile that also denies `process-info*` to the caller itself
 (`(deny process-info*)` with no `(allow process-info* (target self))`)

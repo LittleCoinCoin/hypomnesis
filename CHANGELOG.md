@@ -120,6 +120,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Some(false)`), as on Linux. Issue #3, item 2 of
   [`docs/roadmap-v0.2.14.md`](docs/roadmap-v0.2.14.md).
 
+### Documentation
+
+- **The macOS limitation is stated once, and every other site points to it** (`README.md`,
+  `docs/FAQ.md`, `src/lib.rs`, `src/gpu/mod.rs`, `src/bin/hmn/main.rs`) — README Limitations
+  item 9 says that the sandbox, not process ownership, decides what `hmn` can read, that
+  `hmn` measures what is permitted and counts the rest, and that `hmn ps` ends its summary
+  with `N unreadable — re-run outside the sandbox`. The FAQ, the `--help` text and the
+  rustdoc point to it. A bare `?` in the NAME column on macOS means both name lookups
+  failed or the process is gone, and the capability table's Fallback cell reads
+  `enumeration, names and lookups try libproc first, then sysctl`.
+
 ## [0.2.13] - 2026-09-30
 
 Answers an askesis dogfooding report

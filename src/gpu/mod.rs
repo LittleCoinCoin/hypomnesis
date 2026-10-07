@@ -379,6 +379,11 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 /// instead (no snapshot fallback exists there). Calling user's own
 /// processes always have names available on either path.
 ///
+/// **On macOS the caller's sandbox decides what is listed, not who owns a
+/// process.** A process whose `ledger` read the sandbox refuses is not in
+/// the `Vec`; [`gpu_process_listing`] reports it in `denied_pids`. A name
+/// that `proc_pidpath` refuses is the kernel's `p_comm`, cut at 16 bytes.
+///
 /// # Errors
 ///
 /// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`

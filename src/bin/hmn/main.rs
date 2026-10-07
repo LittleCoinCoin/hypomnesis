@@ -155,9 +155,9 @@ mod watch;
                   SYSTEM/LOCAL SERVICE/NETWORK SERVICE, a PPL-protected process, or (rarely) \
                   the snapshot API itself failing. None of these are intrinsically \
                   malicious, but on a single-user desktop an unexpected one holding \
-                  substantial VRAM is worth investigating. On macOS a bare `?` means a sandbox \
-                  withheld the name, and elevation does not change that; see README \
-                  Limitations, item 9. The summary line's protected-count \
+                  substantial VRAM is worth investigating. On macOS a bare `?` means both name \
+                  lookups failed or the process is gone, and elevation does not change \
+                  that; see README Limitations, item 9. The summary line's protected-count \
                   parenthetical counts `[protected]`/absent-name/the rare nvidia-smi-fallback \
                   literal `?` — not `[exited]`, since elevation can't help a process that's \
                   already gone. On macOS the same clause reads \
