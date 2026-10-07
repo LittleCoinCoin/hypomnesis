@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its signature and returns the same error; a partial denial, where the sandbox's own
   processes are readable, stays an `Ok` list.
 
+- **`hmn ps` counts the processes a macOS sandbox hides** (`src/bin/hmn/ps.rs`, `format.rs`,
+  `main.rs`) — the summary line reads `907 unreadable, 1 protected — re-run outside the
+  sandbox` (one remedy for both counts; with nothing protected, `907 unreadable — re-run
+  outside the sandbox`), and a refused process list is a failed device: `hmn: ps failed to query
+  device 0: process list unreadable: N refused, none other than the caller's could be read —
+  re-run outside the sandbox` (` (skipped)` appended without `--device`), where a sandbox that
+  denies only the ledger read printed `0 GPU processes found.`. `--pid N` counts only N among the
+  refused processes, and `--exit-status` exits `2`, not `1`, for an empty listing in which a
+  process the filters could match was unreadable. The count goes to stderr; `--json` and the table
+  carry no field for it. The Windows and Linux text, `N protected — re-run elevated for names`, is
+  unchanged, and no process is ever refused there.
+
 ### Changed
 
 - **The SPILL and per-PID `PAGED` cells read `n/a` on Linux and macOS** (`src/bin/hmn/format.rs`,

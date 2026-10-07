@@ -175,7 +175,8 @@ mod watch;
                   resident-bytes semantics as Windows `WorkingSetSize` and Linux `VmRSS`.\n\
                   - macOS: the sandbox, not process ownership, decides what `hmn` can read — \
                   unsandboxed, every user's processes are listed and elevation does not \
-                  help; see README Limitations, item 9."
+                  help. `hmn` counts the processes it cannot read and exits `2` under \
+                  `ps --exit-status` when it cannot tell; see README Limitations, item 9."
 )]
 struct Cli {
     /// Subcommand. Omitted for the default device-summary view.
@@ -201,13 +202,15 @@ enum Commands {
     /// (compositor, browsers, compute, etc.). On macOS: every
     /// process holding `graphics_footprint` ledger bytes that the
     /// sandbox lets it read (the sandbox, not process ownership, decides;
-    /// see README Limitations, item 9). See `hmn --help`
+    /// see README Limitations, item 9); the processes it cannot read are
+    /// counted on the summary line as unreadable. See `hmn --help`
     /// Limitations for the full per-platform breakdown.
     Ps {
         /// Keep only this PID. Repeatable (`--pid A --pid B`): a process
         /// matching any of them is listed — a launcher's wrapper and its
         /// GPU child, or two chained runs. The PIDs are echoed on the
-        /// summary line.
+        /// summary line. An unreadable process counts as a possible match,
+        /// so `--pid N` reports only N among the unreadable ones.
         #[arg(long = "pid", value_name = "PID")]
         pids: Vec<u32>,
         /// Filter to a single GPU index. Default: every device reported
@@ -272,7 +275,9 @@ enum Commands {
         /// matched. A device named by `--device` that cannot be listed is
         /// still exit `2`. A listing where every device failed is also `2`,
         /// never `1`, and so is an empty listing that skipped a failed
-        /// device, since `1` means nothing matched on every device queried.
+        /// device or left unreadable a process the filters could match,
+        /// since `1` means nothing matched on every device queried and no
+        /// process the filters could match was unreadable.
         #[arg(long)]
         exit_status: bool,
     },
