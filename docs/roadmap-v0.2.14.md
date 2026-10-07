@@ -264,15 +264,15 @@ that reads each PID separately, so it is the one where some rows can go missing.
 |---|---|---|---|
 | 1 | Metal arm in `bounds_check`; Metal named in `NoGpuSource` and the `# Errors` docs (request 3) | **fix** | ✅ |
 | 2 | `process_exists` through the lookup rule: PID 0, sandboxed callers (request 5) | **fix** | ✅ |
-| 3 | `sysctl kern.proc` enumeration and `p_comm` names when libproc is refused; four-outcome ledger read (request 1) | feature | ⬜ |
-| 4 | `gpu_process_listing`, `denied_pids`, `ProcessListDenied` (request 1) | feature | ⬜ |
+| 3 | `sysctl kern.proc` enumeration and `p_comm` names when libproc is refused; five-outcome ledger read (request 1) | feature | ✅ |
+| 4 | `gpu_process_listing`, `denied_pids`, `ProcessListDenied` (request 1) | feature | ✅ |
 | 5 | `hmn ps` states a skipped device; exits `2` when every device failed, and under `--exit-status` when one failed and nothing is listed (request 1) | **fix** | ✅ |
-| 6 | `unreadable` counts, `--exit-status` `2`, `watch` notices (request 1); the platform remedy ships in PR B | feature | ⬜ |
+| 6 | `unreadable` counts, `--exit-status` `2`, `watch` notices (request 1); the platform remedy ships in PR B | feature | ✅ |
 | 7 | `n/a` vs `?` in SPILL and `PAGED` cells (request 4, cells) | fix | ✅ |
 | 8 | The macOS limitation restated from evidence, one canonical statement (request 2) | docs | ✅ |
 | 9 | `spilled: null` notice and `ROADMAP.md` v0.3.0 entries (request 4, JSON) | docs | ✅ |
 | 10 | Correct the field report's F5 mechanism and site list, before the issue comment | docs | ✅ |
-| 11 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ⬜ |
+| 11 | README, FAQ, tutorials, `CHANGELOG.md`, `ROADMAP.md` | docs | ✅ |
 
 Items 3, 4 and 6 get an adversarial review before they merge. They change what the instrument
 reports and the exit codes scripts gate on. Every item updates the `CHANGELOG.md`, `--help`,
@@ -360,7 +360,35 @@ stop at 99999, and on Linux `pid_max` can exceed 999999.
 
 ## Consistency pass
 
-To be run with fresh eyes after the last commit.
+Run by a reviewer with no part in the work, who read PR C's diff against the code the maintainer
+wrote (`nvml.rs`, `pdh.rs`, `dxgi.rs`, `ps.rs`, `watch.rs`, `format.rs`), PR B's accepted
+additions and `CONVENTIONS.md`. The question was consistency with that code, not correctness,
+which the item reviews covered. `cargo fmt`, clippy and `cargo doc -D warnings` pass. Every
+`unsafe`, `as` and `// EXPLICIT:` carries its annotation, and `# Errors`, `#[non_exhaustive]`,
+the test-module allowances and the `cfg(any(.., test))` gating follow the conventions.
+
+Adopted:
+
+- One remedy join, `format::with_remedy`, behind the summary clause, the denial line and the
+  unreadable-PID notice; one `--pid` rule, `PsFilters::pid_selected`, behind both the row filter
+  and the unreadable count.
+- `errno` read one way in the new `metal.rs` code, through `last_errno()`, and the
+  `rc == 0 ? 0 : errno` read written once.
+- The `KERN_PROC_ALL` attempt bound and buffer slack as named, documented constants, as NVML
+  names its retry bounds; the `KERN_PROC_ALL` functions named after PR B's `kern_proc_pid_*`
+  family.
+- `ProcessListDenied`'s `Display` in the `<noun> <problem> (<context>)` shape of
+  `CONVENTIONS.md`: `process list unreadable (N refused, none other than the caller's could be
+  read)`.
+- Each rule stated once, with the other sites pointing to it: the `ProcessListDenied` trigger on
+  the variant, the never-parse-a-failed-fill rule on `classify_kern_proc_all`; and four stale or
+  missing notes fixed (`RemedyPurpose::Names`, the raw `sample failed` line, two unwrapped
+  paragraphs, the macOS listing cell of the `lib.rs` table).
+
+Left as they are: the `--help` text that restates the 16-byte cut for `ps` and for `watch` (the
+crate's help restates rules elsewhere), the exit-code rule's prose copies, which predate this
+release, a shared helper for the two Seatbelt-profile tests in `tests/macos_smoke.rs`, and the
+new `hmn watch` lines, which stay inline in `run_watch`.
 
 ---
 
