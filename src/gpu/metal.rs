@@ -1129,29 +1129,38 @@ fn tally_reads(
 
 /// The processes holding GPU memory, and what the caller's sandbox kept
 /// from it.
-struct MetalProcessList {
+pub(super) struct MetalProcessList {
     /// One row per PID holding GPU memory, the caller's own included.
-    entries: Vec<crate::GpuProcessEntry>,
+    pub(super) entries: Vec<crate::GpuProcessEntry>,
     /// The PIDs whose ledger read the sandbox refused, in enumeration
     /// order, excluding the caller, gone PIDs and PIDs that are not
     /// positive.
-    denied_pids: Vec<u32>,
+    pub(super) denied_pids: Vec<u32>,
     /// How many PIDs other than the caller were read, zero balances
     /// included.
-    others_read: usize,
+    pub(super) others_read: usize,
 }
 
-/// Enumerate the processes on `device_index` and read each one's
-/// `graphics_footprint`.
+/// Enumerate every process on `device_index` and read each one's
+/// `graphics_footprint`: every process the caller's sandbox lets it read.
 ///
-/// `None` for any `device_index != 0`, when no enumeration gave a trusted list
-/// (see [`list_compute_processes`]), when the ledger entry index did not
-/// resolve, and when no other process was read, none was refused and at least
-/// one failed. A PID whose read is refused is in `denied_pids`; a PID that is
-/// gone, or holds a zero balance, makes no row; a PID that is not positive is
-/// skipped before its read. Names come from [`name_after_pidpath`], with
-/// `p_comm` as the fallback.
-fn list_processes(device_index: u32) -> Option<MetalProcessList> {
+/// `None` when:
+/// - `device_index` is not 0;
+/// - `proc_listpids` fails without being refused: an `errno` other than
+///   `EPERM`, no `errno`, a size too small for one PID, or a success that
+///   lists no PID (`sysctl` is not tried);
+/// - `proc_listpids` is refused and `sysctl(KERN_PROC_ALL)` is refused,
+///   fails, or gives a listing the record-size guard distrusts;
+/// - the ledger entry index did not resolve;
+/// - no other process was read, none was refused and at least one failed.
+///
+/// A PID whose read is refused is in `denied_pids`; a PID that is gone, or
+/// holds a zero balance, makes no row (mirrors NVML's per-process filter on
+/// Linux); a PID that is not positive is skipped before its read. Names
+/// come from [`name_after_pidpath`], with `p_comm` as the fallback. The
+/// caller decides from `others_read` and `denied_pids` whether the list is
+/// readable at all.
+pub(super) fn list_processes(device_index: u32) -> Option<MetalProcessList> {
     if device_index != 0 {
         return None;
     }
@@ -1187,42 +1196,6 @@ fn list_processes(device_index: u32) -> Option<MetalProcessList> {
         others_read: tally.others_read,
     })
 }
-/// The rows of `list`, or `None` when the sandbox kept every other
-/// process from being read: `others_read == 0` with at least one denied
-/// PID.
-///
-/// `entries` is never the test, because the caller lists itself (it holds
-/// a 16 KiB footprint of its own) wherever it can read its own ledger.
-fn legacy_entries(list: MetalProcessList) -> Option<Vec<crate::GpuProcessEntry>> {
-    if list.others_read == 0 && !list.denied_pids.is_empty() {
-        None
-    } else {
-        Some(list.entries)
-    }
-}
-
-/// Enumerate every process holding GPU memory on `device_index` that
-/// the caller's sandbox lets it read: [`list_processes`] seen as the
-/// `Option<Vec<_>>` that [`crate::gpu::gpu_processes`] takes.
-///
-/// `None` when:
-/// - `device_index` is not 0;
-/// - `proc_listpids` fails without being refused: an `errno` other than
-///   `EPERM`, no `errno`, a size too small for one PID, or a success that
-///   lists no PID (`sysctl` is not tried);
-/// - `proc_listpids` is refused and `sysctl(KERN_PROC_ALL)` is refused,
-///   fails, or gives a listing the record-size guard distrusts;
-/// - the ledger entry index did not resolve;
-/// - no other process was read, none was refused and at least one failed;
-/// - the sandbox denied the read of every process but the caller
-///   ([`legacy_entries`]).
-///
-/// PIDs with a zero `graphics_footprint` balance make no row (mirrors
-/// NVML's per-process filter on Linux).
-pub(super) fn list_compute_processes(device_index: u32) -> Option<Vec<crate::GpuProcessEntry>> {
-    list_processes(device_index).and_then(legacy_entries)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -1234,17 +1207,6 @@ mod tests {
     /// This process's PID.
     fn me() -> i32 {
         i32::try_from(std::process::id()).unwrap()
-    }
-
-    /// A Metal row for `pid`, holding 16 KiB.
-    fn row(pid: u32) -> crate::GpuProcessEntry {
-        crate::GpuProcessEntry {
-            pid,
-            name: None,
-            used_bytes: 16384,
-            shared_used_bytes: 0,
-            source: crate::GpuQuerySource::Metal,
-        }
     }
 
     /// The first 16 bytes (`MAXCOMLEN`) of a path's file name.
@@ -1524,43 +1486,5 @@ mod tests {
             records.len()
         );
         assert_is_my_comm(&mine.map(|record| record.comm.clone()).unwrap_or_default());
-    }
-    #[test]
-    fn legacy_entries_hides_a_list_where_only_denials_were_found() {
-        // The shape under profiles P and S0: hmn lists itself at 16 KiB,
-        // everything else is denied.
-        let own_row = MetalProcessList {
-            entries: vec![row(1234)],
-            denied_pids: vec![7],
-            others_read: 0,
-        };
-        assert!(legacy_entries(own_row).is_none());
-        // The shape under L: not even the caller's own read works.
-        let empty = MetalProcessList {
-            entries: Vec::new(),
-            denied_pids: vec![7],
-            others_read: 0,
-        };
-        assert!(legacy_entries(empty).is_none());
-    }
-
-    #[test]
-    fn legacy_entries_keeps_an_empty_list_with_nothing_denied() {
-        let nothing = MetalProcessList {
-            entries: Vec::new(),
-            denied_pids: Vec::new(),
-            others_read: 0,
-        };
-        let kept = legacy_entries(nothing).unwrap();
-        assert!(kept.is_empty(), "{kept:?}");
-        // The shape under S: a sibling was read, five others were denied;
-        // the caller's own row stays.
-        let partial = MetalProcessList {
-            entries: vec![row(1234), row(77)],
-            denied_pids: vec![1, 2, 3, 4, 5],
-            others_read: 3,
-        };
-        let kept = legacy_entries(partial).unwrap();
-        assert_eq!(kept.iter().map(|e| e.pid).collect::<Vec<_>>(), [1234, 77]);
     }
 }

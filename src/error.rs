@@ -90,6 +90,18 @@ pub enum HypomnesisError {
     )]
     NoGpuSource,
 
+    /// The processes were enumerated but none other than the caller's
+    /// could be read, so the list says nothing about the machine.
+    ///
+    /// `denied` is the number of processes the caller was refused.
+    #[error(
+        "process list unreadable: {denied} refused, none other than the caller's could be read"
+    )]
+    ProcessListDenied {
+        /// How many processes' GPU memory the caller was refused.
+        denied: u32,
+    },
+
     /// Generic I/O error.
     ///
     /// Reserved for a possible future I/O-based backend — this crate
@@ -124,6 +136,15 @@ mod tests {
         assert_eq!(
             text,
             "no GPU measurement source available (Metal, NVML, and nvidia-smi all failed or are disabled)"
+        );
+    }
+
+    #[test]
+    fn process_list_denied_display_states_the_count_and_no_remedy() {
+        let text = HypomnesisError::ProcessListDenied { denied: 908 }.to_string();
+        assert_eq!(
+            text,
+            "process list unreadable: 908 refused, none other than the caller's could be read"
         );
     }
 }

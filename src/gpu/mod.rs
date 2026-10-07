@@ -10,7 +10,9 @@
 //! (since v0.2.13), which reuses the Windows and macOS backends' process
 //! lookups to answer whether a PID names a running process at all.
 
-use crate::{GpuDeviceInfo, GpuProcessEntry, HypomnesisError, ProcessGpuInfo, Result};
+use crate::{
+    GpuDeviceInfo, GpuProcessEntry, GpuProcessListing, HypomnesisError, ProcessGpuInfo, Result,
+};
 
 #[cfg(any(
     feature = "nvml",
@@ -375,25 +377,38 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 /// is past the device count reported by `NVML`, `DXGI` or `Metal`.
 /// Returns [`HypomnesisError::NoGpuSource`] if every available backend
 /// fails (or no backend is enabled by features).
-#[allow(unused_variables)] // `device_index` unused when no GPU backend feature is enabled
-#[allow(clippy::missing_const_for_fn)] // const only when no features are enabled
+/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when at least one
+/// process was refused and none other than the caller's could be read.
 pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
+    gpu_process_listing(device_index).map(|listing| listing.entries)
+}
+
+/// List every process holding GPU memory on the given device, and the
+/// PIDs whose GPU memory the caller was refused.
+///
+/// The listing's `entries` are what [`gpu_processes`] returns; see there
+/// for the backends and their semantics.
+///
+/// # Errors
+///
+/// Returns [`HypomnesisError::DeviceIndexOutOfRange`] if `device_index`
+/// is past the device count reported by `NVML`, `DXGI` or `Metal`.
+/// Returns [`HypomnesisError::NoGpuSource`] if every available backend
+/// fails (or no backend is enabled by features).
+/// Returns [`HypomnesisError::ProcessListDenied`] on macOS when at least one
+/// process was refused and none other than the caller's could be read.
+pub fn gpu_process_listing(device_index: u32) -> Result<GpuProcessListing> {
     // Metal is the macOS primary source: per-PID ledger reads of
     // `graphics_footprint` over `proc_listpids`, or over
-    // `sysctl(KERN_PROC_ALL)` when libproc is refused: every process the
-    // caller's sandbox lets it read. The bridge returns `None`, and the listing
-    // falls through to `NoGpuSource`, when `device_index` is not 0, when
-    // `proc_listpids` fails without being refused (an `errno` other than
-    // `EPERM`, no `errno`, a size too small for one PID, or a success that
-    // lists no positive PID), when it is refused and `KERN_PROC_ALL` is
-    // refused, fails or is distrusted by the record-size guard, when the ledger
-    // entry index did not resolve, when no other process was read, none was
-    // refused and at least one failed, or when the sandbox denied the read of
-    // every process but the caller.
+    // `sysctl(KERN_PROC_ALL)` when libproc is refused. `None` (the index is not
+    // 0, no enumeration gave a trusted list, the ledger entry index did not
+    // resolve, or no other process was read, none was refused and at least one
+    // failed) falls through to the other arms and `NoGpuSource`, as for every
+    // backend; a list that was enumerated but not readable is
+    // `ProcessListDenied`.
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some(mut rows) = metal::list_compute_processes(device_index) {
-        sort_by_pid(&mut rows);
-        return Ok(rows);
+    if let Some(list) = metal::list_processes(device_index) {
+        return decide_listing(list.entries, list.denied_pids, list.others_read);
     }
 
     // NVML is the primary source on Linux: it answers cleanly there
@@ -424,7 +439,7 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
             })
             .collect();
         sort_by_pid(&mut entries);
-        return Ok(entries);
+        return Ok(listing_without_denials(entries));
     }
 
     // PDH primary path on Windows / WDDM 2.0+. Reads VidMm-tracked
@@ -447,7 +462,7 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
             .collect();
         sort_by_pid(&mut entries);
         resolve_unresolved_windows_names(&mut entries);
-        return Ok(entries);
+        return Ok(listing_without_denials(entries));
     }
 
     #[cfg(feature = "nvidia-smi-fallback")]
@@ -465,11 +480,56 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
             })
             .collect();
         sort_by_pid(&mut entries);
-        return Ok(entries);
+        return Ok(listing_without_denials(entries));
     }
 
     bounds_check(device_index)?;
     Err(HypomnesisError::NoGpuSource)
+}
+
+/// The decision on a macOS listing: [`HypomnesisError::ProcessListDenied`]
+/// when the list was enumerated but not read, otherwise the rows and the
+/// denied PIDs, each sorted by `pid`.
+///
+/// The list was not read when at least one process was refused and no process
+/// other than the caller's was read (`others_read` is 0; a zero balance counts
+/// as read). A sandboxed caller's own row is not returned on its own: `hmn`
+/// lists itself at 16 KiB, so where the sandbox refuses every other process
+/// `entries` is exactly the caller's row, and returning it as `Ok` would be
+/// the empty list again. Nothing denied is not a refusal: an idle machine has
+/// an empty list.
+#[cfg(any(all(target_os = "macos", feature = "metal"), test))]
+fn decide_listing(
+    mut entries: Vec<GpuProcessEntry>,
+    mut denied_pids: Vec<u32>,
+    others_read: usize,
+) -> Result<GpuProcessListing> {
+    denied_pids.sort_unstable();
+    denied_pids.dedup();
+    if others_read == 0 && !denied_pids.is_empty() {
+        return Err(HypomnesisError::ProcessListDenied {
+            denied: u32::try_from(denied_pids.len()).unwrap_or(u32::MAX),
+        });
+    }
+    sort_by_pid(&mut entries);
+    Ok(GpuProcessListing {
+        entries,
+        denied_pids,
+    })
+}
+
+/// A listing with no denied PIDs: what a backend that cannot refuse a
+/// process returns.
+#[cfg(any(
+    all(target_os = "linux", feature = "nvml"),
+    all(windows, feature = "pdh"),
+    feature = "nvidia-smi-fallback"
+))]
+const fn listing_without_denials(entries: Vec<GpuProcessEntry>) -> GpuProcessListing {
+    GpuProcessListing {
+        entries,
+        denied_pids: Vec::new(),
+    }
 }
 
 /// Whether a process with this PID exists right now, as far as this
@@ -565,7 +625,8 @@ fn status_tgid(status: &str) -> Option<u32> {
     all(target_os = "linux", feature = "nvml"),
     all(windows, feature = "pdh"),
     all(target_os = "macos", feature = "metal"),
-    feature = "nvidia-smi-fallback"
+    feature = "nvidia-smi-fallback",
+    test
 ))]
 fn sort_by_pid(entries: &mut [GpuProcessEntry]) {
     entries.sort_by_key(|e| e.pid);
@@ -731,5 +792,71 @@ mod tests {
             "{:?}",
             bounds_check(1)
         );
+    }
+
+    /// A GPU process row for the decision tests.
+    fn row(pid: u32) -> GpuProcessEntry {
+        GpuProcessEntry {
+            pid,
+            name: None,
+            used_bytes: 16_384,
+            shared_used_bytes: 0,
+            source: crate::GpuQuerySource::Metal,
+        }
+    }
+
+    #[cfg(any(
+        all(target_os = "linux", feature = "nvml"),
+        all(windows, feature = "pdh"),
+        feature = "nvidia-smi-fallback"
+    ))]
+    #[test]
+    fn listing_without_denials_has_no_denied_pids() {
+        let listing = listing_without_denials(vec![row(7)]);
+        assert!(listing.denied_pids.is_empty(), "{:?}", listing.denied_pids);
+        assert_eq!(listing.entries.len(), 1);
+    }
+
+    #[test]
+    fn decide_listing_is_denied_when_only_the_callers_own_row_was_read() {
+        // A sandboxed caller's own row is not returned on its own: under
+        // profiles P and S0 `entries` is exactly the caller's row, with no
+        // other process read.
+        let result = decide_listing(vec![row(4242)], vec![1, 2, 3], 0);
+        assert!(
+            matches!(
+                result,
+                Err(HypomnesisError::ProcessListDenied { denied: 3 })
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn decide_listing_sorts_the_rows_and_the_denied_pids_without_duplicates() {
+        let listing = decide_listing(vec![row(9), row(3), row(5)], vec![20, 7, 20], 1).ok();
+        let pids = listing
+            .as_ref()
+            .map(|l| l.entries.iter().map(|e| e.pid).collect::<Vec<u32>>());
+        assert_eq!(pids, Some(vec![3, 5, 9]));
+        assert_eq!(listing.map(|l| l.denied_pids), Some(vec![7, 20]));
+        // A PID listed twice is one refusal, so the count agrees with the list.
+        let result = decide_listing(Vec::new(), vec![5, 5], 0);
+        assert!(
+            matches!(
+                result,
+                Err(HypomnesisError::ProcessListDenied { denied: 1 })
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn decide_listing_with_nothing_denied_is_ok_even_when_empty() {
+        let listing = decide_listing(Vec::new(), Vec::new(), 0).ok();
+        let empty = listing.as_ref().map(|l| l.entries.is_empty());
+        assert_eq!(empty, Some(true));
+        let denied = listing.map(|l| l.denied_pids);
+        assert_eq!(denied, Some(Vec::new()));
     }
 }

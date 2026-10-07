@@ -209,6 +209,31 @@ pub struct GpuProcessEntry {
     pub source: GpuQuerySource,
 }
 
+/// The processes holding GPU memory on one device, and the PIDs whose
+/// GPU memory the caller was not allowed to read.
+///
+/// Returned by [`crate::gpu_process_listing`]. `entries` is what
+/// [`crate::gpu_processes`] returns: one [`GpuProcessEntry`] per process
+/// holding GPU memory, sorted by `pid` ascending. `denied_pids` names
+/// the processes the platform refused to measure, so a caller can ask
+/// whether one PID was among them; `denied_pids.len()` is how many.
+///
+/// `#[non_exhaustive]`: fields may be added in future releases, so the
+/// struct cannot be built with a literal outside this crate.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GpuProcessListing {
+    /// One row per process holding GPU memory, sorted by `pid` ascending:
+    /// what [`crate::gpu_processes`] returns.
+    pub entries: Vec<GpuProcessEntry>,
+    /// The PIDs of the processes whose GPU memory the platform refused to
+    /// let the caller read. Empty when nothing was refused. A list, not a
+    /// count, so a caller can ask about one PID; its length is the count.
+    /// Sorted by `pid` ascending, without duplicates; always empty on Linux
+    /// and Windows.
+    pub denied_pids: Vec<u32>,
+}
+
 /// Combined snapshot of process `RAM` and GPU memory state at a point in time.
 ///
 /// Constructed via [`Snapshot::now`] (one device) or [`Snapshot::all`]
