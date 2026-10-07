@@ -339,7 +339,10 @@ enum Commands {
     /// it does not auto-stop on this basis, use `--duration` or Ctrl+C.
     /// At attach it does check each explicit PID: one that names no
     /// running process gets a one-line warning on stderr (since
-    /// v0.2.13), and is still watched. Spill is measured as shared-memory
+    /// v0.2.13), and so does one that is unreadable here (a macOS
+    /// sandbox's refusal: its rows read 0 MiB); both are still watched.
+    /// Auto-selection and `--follow-new` say how many processes they
+    /// cannot follow. Spill is measured as shared-memory
     /// growth above the first sample, so a spill already under way at
     /// attach is not counted; since v0.2.13 a warning says so at attach
     /// and the closing summary repeats it (`hmn ps` shows the current
