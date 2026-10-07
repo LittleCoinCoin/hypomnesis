@@ -41,6 +41,7 @@ graph TD
 | ID | Date | Source | Nodes Added | Rationale |
 |:---|:-----|:-------|:------------|:----------|
 | A5 | 2026-10-07 | `__reports__/v0214_roadmap/10-amendment_a5_main_rebase_v0.md` | [] (the four PR C leaves revised) | PR B merged as b716087 after its review (A4): base, symbols, test idiom, counts and befores re-measured on main; `KERN_PROC_ALL` record-size guard, same-boot compare base, fail-not-skip sandbox test |
+| A6 | 2026-10-07 | `__reports__/v0214_roadmap/11-amendment_a6_kinfo_reviews_v0.md` | [] (kinfo_enumeration revised) | Its three reviews found FFI paths no test reaches: a pure `classify_kinfo_all` + bounded `fill_kinfo_all_with`, `comm_from_lookup`, `pidpath_failure` tests, non-vacuous harness scripts, exact `None` docs |
 
 ## Progress
 | Node | Branch | Commits | Notes |
