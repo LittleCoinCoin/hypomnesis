@@ -42,9 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `format.rs`, `main.rs`) — at attach, an explicit PID the caller was refused gets
   `hmn watch: pid=N is unreadable here; its rows will read 0 MiB — re-run outside the sandbox`,
   once, and is still watched; it is never also reported as naming no running process.
-  Auto-selection and `--follow-new` print `hmn watch: device D: N unreadable — re-run outside the
-  sandbox; they are not followed` once, and when nothing was selected, `found no GPU processes`
-  carries the same count and remedy inside its parentheses, so the line says why. A refused
+  `--follow-new` prints `hmn watch: device D: N unreadable — re-run outside the sandbox; they
+  are not followed` once, and when nothing was selected, `found no GPU processes` carries the same
+  count and remedy inside its parentheses, so the line says why. A refused
   process list at attach is `hmn: watch failed to query device D: process list unreadable: … —
   re-run outside the sandbox`; the per-interval `sample failed` line repeats no remedy. On
   Windows and Linux no process is ever refused, so none of these lines appears.

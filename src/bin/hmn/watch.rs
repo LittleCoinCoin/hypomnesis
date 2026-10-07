@@ -1230,10 +1230,10 @@ pub fn run_watch(
     for notice in unmatchable_notices(&first.unmatchable, &mut announced) {
         eprintln!("{notice}");
     }
-    // Auto-selection never follows a process it cannot read. An explicit
-    // watch names its denied PIDs above; with nothing to watch, the "found
-    // no GPU processes" line already carries the count.
-    if selection.explicit.is_empty()
+    // `--follow-new` never follows a process it cannot read, and says how
+    // many. With nothing to watch, the "found no GPU processes" line
+    // already carries the count.
+    if selection.follow_new
         && !watched.is_empty()
         && let Some(clause) = &unreadable
     {
