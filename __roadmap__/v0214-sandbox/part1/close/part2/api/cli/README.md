@@ -15,7 +15,7 @@ Turn the library's denial into the CLI's stated count, with a platform-correct r
 ## Status
 ```mermaid
 graph TD
-    ps_watch_unreadable[Item 6: unreadable counts, remedy, exit status, watch notices]:::inprogress
+    ps_watch_unreadable[Item 6: unreadable counts, remedy, exit status, watch notices]:::done
     close[Part 2 close]:::planned
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
@@ -27,7 +27,7 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `ps_watch_unreadable.md` | 📄 Leaf Task | 🔄 In Progress |
+| `ps_watch_unreadable.md` | 📄 Leaf Task | ✅ Done |
 | `close/` | 📁 Directory | ⬜ Planned |
 
 ## Amendment Log
@@ -37,3 +37,4 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `ps_watch_unreadable.md` | `task/ps_watch_unreadable` | a8f3525, 0cf0a0b, 80a9274 on v0214-part2 (implemented as e0a4fc7, 890b5f6, 431f8c8 on e7d6c2d; red 6d5a322 squashed into Step 2, A8 fixes folded in; SHAs re-created by the trailer rewrite, trees identical) | Sonnet implementer; two extra pure seams (`no_processes_line`, `not_followed_notice`) so every watch line is pinned whole. Reviews: spec verifier PASS WITH NOTES (0 should-fix; seam exact, `1058 unreadable` = probe `denied=1058` in 4/4 runs; Windows/Linux `format_ps_summary_with` byte-identical over 432 cases), test review PASS WITH NOTES (3 should-fix). A8 adopted them; the A8 delta verifier (2 should-fix: `accept`'s own assert, a `NoGpuSource` pin lost to A8's rewrite) and a final check (0 should-fix) passed; two record notes fixed by the coordinator. Full gate set green per commit, lib 146 native and Rosetta, bin 280, `cli_ps` 8 + 1 ignored. Residuals: `run_watch` passing `&[]` to `missing_pid_notices` is caught by nothing; the `run_ps` accumulation and `denied_pid_notices` wiring only by CLI gates. |
