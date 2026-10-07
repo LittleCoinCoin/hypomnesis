@@ -5,10 +5,11 @@
 //! Each backend (`nvml`, `dxgi`, `nvidia_smi`) is gated by a Cargo
 //! feature; the dispatchers below try them in priority order and surface
 //! the first success. Backend modules are crate-private — public access
-//! is via the four dispatchers ([`device_count`], [`device_info`],
-//! [`process_gpu_info`], [`gpu_processes`]), plus [`process_exists`]
-//! (since v0.2.13), which reuses the Windows and macOS backends' process
-//! lookups to answer whether a PID names a running process at all.
+//! is via the five dispatchers ([`device_count`], [`device_info`],
+//! [`process_gpu_info`], [`gpu_processes`], [`gpu_process_listing`]), plus
+//! [`process_exists`] (since v0.2.13), which reuses the Windows and macOS
+//! backends' process lookups to answer whether a PID names a running process
+//! at all.
 
 use crate::{
     GpuDeviceInfo, GpuProcessEntry, GpuProcessListing, HypomnesisError, ProcessGpuInfo, Result,
@@ -315,11 +316,18 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 ///
 /// Returns one [`GpuProcessEntry`] per running process visible to the
 /// active backend. Empty `Vec` when the device exists but no processes
-/// are using it.
+/// are using it. [`gpu_process_listing`] returns the same rows together
+/// with the PIDs the platform refused to let the caller measure.
 ///
 /// # Source priority
 ///
-/// 1. `NVML` (Linux primary). `nvmlDeviceGetComputeRunningProcesses_v3`
+/// 1. `Metal` (macOS primary). `proc_listpids`, or `sysctl`
+///    `KERN_PROC_ALL` when libproc is refused, enumerates the processes,
+///    and one `ledger` read per PID gives its `graphics_footprint`: every
+///    process the caller's sandbox lets it read, whatever its owner. A list
+///    that was enumerated but not readable is an error, not an empty list;
+///    see [`gpu_process_listing`] for that case and its table.
+/// 2. `NVML` (Linux primary). `nvmlDeviceGetComputeRunningProcesses_v3`
 ///    yields `(pid, used_bytes)`; `/proc/<pid>/comm` supplies names on
 ///    Linux, extended past the kernel's 15-byte cut from the `exe`
 ///    link or `argv[0]` when either shows the full name. Capped at 64
@@ -327,7 +335,7 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 ///    mirror the library's other `NVML` consumers; offending rows are
 ///    dropped rather than reported as garbage. Returns compute-only
 ///    processes (active `CUDA` context).
-/// 2. `PDH` (Windows primary, consumer `WDDM`). Reads
+/// 3. `PDH` (Windows primary, consumer `WDDM`). Reads
 ///    `\GPU Process Memory(<instance>)\Dedicated Usage` (→
 ///    `used_bytes`, dedicated commit) and its `Shared Usage` sibling
 ///    (→ `shared_used_bytes`, resident shared — the `WDDM` spill
@@ -338,14 +346,14 @@ pub(crate) fn dxgi_non_nvidia_devices(starting_index: u32) -> Vec<(GpuDeviceInfo
 ///    memory — compositor, browsers, games, compute alike — because
 ///    `VidMm`'s accounting is not compute-only. See
 ///    [`GpuQuerySource::Pdh`] doc-comment for the semantics shift.
-/// 3. `nvidia-smi` (fallback) — subprocess
+/// 4. `nvidia-smi` (fallback) — subprocess
 ///    `nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits --id=N`.
 ///    Reached on `Linux` when `NVML` is missing, or on `Windows` when
 ///    the `PDH` `GPU Process Memory` counter set is unregistered (e.g.
 ///    pre-`WDDM 2.0` drivers — vanishingly rare in 2026). Compute-only
 ///    semantics; under `WDDM` typically returns rows with `[N/A]`
 ///    memory that the parser drops, so the list often appears empty.
-/// 4. `DXGI` is **not** used — `IDXGIAdapter3::QueryVideoMemoryInfo`
+/// 5. `DXGI` is **not** used — `IDXGIAdapter3::QueryVideoMemoryInfo`
 ///    only answers for the calling process and cannot enumerate other
 ///    PIDs.
 ///
@@ -386,8 +394,27 @@ pub fn gpu_processes(device_index: u32) -> Result<Vec<GpuProcessEntry>> {
 /// List every process holding GPU memory on the given device, and the
 /// PIDs whose GPU memory the caller was refused.
 ///
-/// The listing's `entries` are what [`gpu_processes`] returns; see there
-/// for the backends and their semantics.
+/// The listing's `entries` are what [`gpu_processes`] returns, and its
+/// backends and limitations apply to them. `denied_pids` names the
+/// processes the platform would not let the caller measure. Report the
+/// count, `denied_pids.len()` or `denied` in
+/// [`HypomnesisError::ProcessListDenied`]: inside an App Sandbox there is
+/// no "outside" to re-run in, so what to do about a refusal is the
+/// application's to say. `hmn` words its advice as a CLI constant.
+///
+/// | Platform | `denied_pids` | [`HypomnesisError::ProcessListDenied`] |
+/// |---|---|---|
+/// | Linux | always empty | never returned |
+/// | Windows | always empty: only names can be refused, which `[protected]` states | never returned |
+/// | macOS | the PIDs whose ledger read the caller's sandbox refused (`EPERM`), not the caller's own, a gone one or a non-positive one | when at least one process was refused and none other than the caller's could be read; a machine with nothing to refuse is `Ok` |
+///
+/// On macOS an `Ok` listing with a non-empty `denied_pids` is a partial
+/// one: `entries` holds the processes the caller could read, and no
+/// entries means those hold no GPU memory. `entries` can hold the caller's
+/// own row, since a process that has initialised Metal holds a few KiB
+/// (`hmn` lists itself at 16 KiB). Whether it appears depends on the
+/// caller, and it is not returned when the result is
+/// [`HypomnesisError::ProcessListDenied`].
 ///
 /// # Errors
 ///

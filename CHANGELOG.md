@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A per-PID ledger read is bytes, denied, gone (`ESRCH`) or failed, and only a refusal (`EPERM`)
   counts as denied. Where libproc works, the output is unchanged.
 
+- **`gpu_process_listing`, `GpuProcessListing` and `HypomnesisError::ProcessListDenied`**
+  (`src/gpu/mod.rs`, `src/snapshot.rs`, `src/error.rs`) — `gpu_process_listing(device_index)`
+  returns the rows `gpu_processes` returns and `denied_pids`, the PIDs whose GPU memory the
+  platform refused to let the caller read, sorted by `pid`. On macOS it returns
+  `ProcessListDenied { denied }` when at least one process was refused and none other than the
+  caller's could be read; on Linux and Windows `denied_pids` is always empty and the error is
+  never returned. The error's `Display` states the count and carries no remedy. `gpu_processes`
+  keeps its signature and returns the same error; a partial denial, where the sandbox's own
+  processes are readable, stays an `Ok` list.
+
 ### Changed
 
 - **The SPILL and per-PID `PAGED` cells read `n/a` on Linux and macOS** (`src/bin/hmn/format.rs`,
@@ -41,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what a sandbox refuses and what `hmn ps` then prints.
   From the [v0.2.13 macOS field check](__reports__/field_check_v0213/01-findings_v1.md),
   F1.
+
+- **On macOS, `gpu_processes` returns an error where it returned an empty list**
+  (`src/gpu/metal.rs`, `src/gpu/mod.rs`, `src/error.rs`) — when the `graphics_footprint` entry of
+  the ledger template does not resolve, or when no other process's ledger read succeeds and none
+  is refused, it returns `NoGpuSource`, where it returned an empty list; `hmn ps` then exits `2`,
+  where it printed `0 GPU processes found.` and exited `0`, unsandboxed included. When the
+  process list is enumerated but no process other than the caller's can be read, it returns
+  `ProcessListDenied`, where it returned `NoGpuSource` or, under a sandbox that denies only the
+  ledger read, an empty list. `gpu_process_listing` returns the same errors. `HypomnesisError` is
+  `#[non_exhaustive]`, so a `match` on it has a wildcard arm.
 
 ### Fixed
 

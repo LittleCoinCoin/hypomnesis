@@ -124,7 +124,8 @@ pub enum GpuQuerySource {
 ///
 /// Distinct from [`ProcessGpuInfo`]: that type describes the *calling*
 /// process's own usage; `GpuProcessEntry` is one row of an enumeration
-/// over processes on the device, returned by [`crate::gpu_processes`].
+/// over processes on the device, returned by [`crate::gpu_processes`] and
+/// [`crate::gpu_process_listing`].
 ///
 /// # Semantics per-backend
 ///
@@ -218,8 +219,11 @@ pub struct GpuProcessEntry {
 /// the processes the platform refused to measure, so a caller can ask
 /// whether one PID was among them; `denied_pids.len()` is how many.
 ///
-/// `#[non_exhaustive]`: fields may be added in future releases, so the
-/// struct cannot be built with a literal outside this crate.
+/// [`crate::gpu_process_listing`] has the per-platform table and the full
+/// rule. Report the count: inside an App Sandbox there is no "outside" to
+/// re-run in.
+///
+/// `#[non_exhaustive]`: fields may be added in future releases.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct GpuProcessListing {
