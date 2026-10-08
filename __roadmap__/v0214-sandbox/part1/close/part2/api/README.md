@@ -16,7 +16,7 @@ Add the additive public API under the names the maintainer fixed (R03), without 
 ```mermaid
 graph TD
     gpu_process_listing[Item 4: gpu_process_listing and ProcessListDenied]:::done
-    cli[Part 2 CLI]:::inprogress
+    cli[Part 2 CLI]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -28,7 +28,7 @@ graph TD
 | Node | Type | Status |
 |:-----|:-----|:-------|
 | `gpu_process_listing.md` | 📄 Leaf Task | ✅ Done |
-| `cli/` | 📁 Directory | 🔄 In Progress |
+| `cli/` | 📁 Directory | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |

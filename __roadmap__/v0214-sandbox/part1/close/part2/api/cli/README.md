@@ -16,7 +16,7 @@ Turn the library's denial into the CLI's stated count, with a platform-correct r
 ```mermaid
 graph TD
     ps_watch_unreadable[Item 6: unreadable counts, remedy, exit status, watch notices]:::done
-    close[Part 2 close]:::planned
+    close[Part 2 close]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -28,7 +28,7 @@ graph TD
 | Node | Type | Status |
 |:-----|:-----|:-------|
 | `ps_watch_unreadable.md` | 📄 Leaf Task | ✅ Done |
-| `close/` | 📁 Directory | ⬜ Planned |
+| `close/` | 📁 Directory | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |

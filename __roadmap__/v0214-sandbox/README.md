@@ -27,9 +27,9 @@ Ship v0.2.14 as PRs A, B and C, each green on CI and each matching R01 as amende
 - [x] Environment measured: rustup stable 1.92 + 1.88, targets x86_64-unknown-linux-gnu and x86_64-apple-darwin, Rosetta, /usr/bin/sandbox-exec, gh logged in as LittleCoinCoin, no cargo-nextest, CARGO_TARGET_DIR unset
 
 ## Success Gates
-- ⬜ PR A, PR B and PR C opened against mi-for-the-rust-of-us/hypomnesis `main`, each with every CI job green (ubuntu / windows / macos-latest × 1.88 / stable, and the Doc check), confirmed by `gh pr checks <n>`
-- ⬜ Every leaf `done` in `dirtree-rdm ls` at every level, with no node left at `amendment`
-- ⬜ R01 scope items 1–8 and 11 show ✅, and R01's Verification section is filled from field runs, not left "to be filled in"
+- ✅ PR A, PR B and PR C opened against mi-for-the-rust-of-us/hypomnesis `main`, each with every CI job green (ubuntu / windows / macos-latest × 1.88 / stable, and the Doc check), confirmed by `gh pr checks <n>`
+- ✅ Every leaf `done` in `dirtree-rdm ls` at every level, with no node left at `amendment`
+- ✅ R01 scope items 1–8 and 11 show ✅, and R01's Verification section is filled from field runs, not left "to be filled in"
 - ⬜ Every row of R08 is checked off against a merged commit
 
 ## Gotchas
@@ -54,7 +54,7 @@ OUTWARD ACTIONS: pushing a branch, opening a PR and posting a comment each need 
 ```mermaid
 graph TD
     docs_pr[PR A: docs-only, report and amended plan]:::done
-    part1[PR B: part 1, cross-platform fixes and docs]:::inprogress
+    part1[PR B: part 1, cross-platform fixes and docs]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -66,7 +66,7 @@ graph TD
 | Node | Type | Status |
 |:-----|:-----|:-------|
 | `docs_pr.md` | 📄 Leaf Task | ✅ Done |
-| `part1/` | 📁 Directory | 🔄 In Progress |
+| `part1/` | 📁 Directory | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -75,4 +75,5 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `part1/` | `v0214-part1`, `v0214-part2` | PR B merged as b716087; PR C 1c97d88 | PR A #6 and PR B #7 are merged; PR C is mi-for-the-rust-of-us/hypomnesis#8, ready for review 2026-10-08 with 8/8 CI jobs green on 1c97d88. Amendments A1–A9. The fourth campaign gate (every row of R08 checked against a merged commit) waits for #8 to merge. |
 | `docs_pr.md` | `field-check-v0213-macos` | fc0d647, 981df7b, c556751, aec53db (on 40a701e) | PR A = mi-for-the-rust-of-us/hypomnesis#6, opened 2026-10-03, 8/8 CI jobs pass; one force-with-lease push over c1810a5. Claude Code row measured in a fresh sandboxed session (CC 2.1.273: rc 71, `sandboxed: 1`, `SANDBOX_RUNTIME=1`): no `process-info` denial, hmn 0.2.13 correct, only `ps(1)` (setuid) refused — a case no scope item covers. Deviations: user decisions kept under their own lead-in in *Decisions taken*, U1–U3/R1-A1 labels kept out of R01; Step 2 committed after Step 4; `live.c` prints `proc_translated`. Two Sonnet verifiers: B-row remedy restored to the leaf's `N protected` wording, two Step 2 overclaims fixed. Open for the user: R01's "agent sandboxes that deny it to stop argv leaks" is unmeasured for any named harness (part1_close's territory). |
