@@ -17,9 +17,9 @@ Answer the review in place: the same 18 commits, each green, and the 15 "at `6e7
 ## Status
 ```mermaid
 graph TD
-    review_code[A10 code: Codex test skip and the code nits, folded per owning commit]:::amendment
-    review_docs[A10 docs: the fifth behaviour change in the CHANGELOG and R01]:::amendment
-    land[A10 landing]:::amendment
+    review_code[A10 code: Codex test skip and the code nits, folded per owning commit]:::done
+    review_docs[A10 docs: the fifth behaviour change in the CHANGELOG and R01]:::done
+    land[A10 landing]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -30,9 +30,9 @@ graph TD
 ## Nodes
 | Node | Type | Status |
 |:-----|:-----|:-------|
-| `review_code.md` | 📄 Leaf Task | 🔵 Amendment |
-| `review_docs.md` | 📄 Leaf Task | 🔵 Amendment |
-| `land/` | 📁 Directory | 🔵 Amendment |
+| `review_code.md` | 📄 Leaf Task | ✅ Done |
+| `review_docs.md` | 📄 Leaf Task | ✅ Done |
+| `land/` | 📁 Directory | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -41,3 +41,5 @@ graph TD
 ## Progress
 | Node | Branch | Commits | Notes |
 |:-----|:-------|:--------|:------|
+| `review_code.md` | `task/a10_code` | 11 fixups folded into 6b73167, fc2c24c, 9891a3a, 3ae75ba (as 6103aac, 7e9e4aa, d774660, c07282f were) | Sonnet implementer; every gate PASS: Codex profile lib tests rc 101 (117 passed, 1 failed) → 0 with the skip line, unsandboxed no skip line, mutations (`failed > 0`, the 16-byte condition, the caller's own `Failed`) each fail a test, BORROW 14 → 0, Windows/Linux files untouched. Spec defect reported: one `// BORROW:` cannot cover four labels under the gate's two-line rule, so three lines. Adversarial Sonnet verifier: no behaviour defect (711 PIDs unsandboxed and 777 under Codex: 0 `Failed`; zombies `Gone`); F2 (a `decide_listing` paragraph pulled from 4f7a0dc into commit 4), F3 (skip-line wording), F5 (caller's own `Failed` untested) and F6 (`NoGpuSource` sentence read as exhaustive) fixed by the same implementer; F4 (stale `EPERM` under `--test-threads=1` after an `rc == 0` rejection) recorded as a residual. |
+| `review_docs.md` | `task/a10_docs` | 4 fixups folded into 9891a3a, f23c0e7, f03298a (as d774660, 9bf9ab0, 6e7cf09 were) | Coordinator-written; trial autosquash with four expected conflicts, each resolved to its commit's own text. Coordinator integration review: "no read worked" was false when the caller's own read succeeds; "no other process was read" written in every commit by a tree filter (commits 1, 2, 4, 5); verifier F1's two stale messages (6103aac, 1c97d88) reworded. |

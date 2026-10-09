@@ -24,7 +24,7 @@ Every new behaviour is macOS-only by construction. Windows and Linux output stay
 graph TD
     kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::done
     api[Part 2 public API]:::done
-    maintainer_review_c[A10: PR C review — template change documented, Codex test skip, nits]:::amendment
+    maintainer_review_c[A10: PR C review — template change documented, Codex test skip, nits]:::done
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -37,7 +37,7 @@ graph TD
 |:-----|:-----|:-------|
 | `kinfo_enumeration.md` | 📄 Leaf Task | ✅ Done |
 | `api/` | 📁 Directory | ✅ Done |
-| `maintainer_review_c/` | 📁 Directory | 🔵 Amendment |
+| `maintainer_review_c/` | 📁 Directory | ✅ Done |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
