@@ -11,7 +11,7 @@ Measure everything a sandbox permits, state what it forbids by count, and stop r
 - [ ] Branch `v0214-part2` exists at `PCfVW/main` b716087 (amendment A5: PR B merged, so the base is upstream `main`, not `v0214-part1`'s head)
 
 ## Success Gates
-- ⬜ kinfo_enumeration, gpu_process_listing, ps_watch_unreadable and part2_close `done` in `dirtree-rdm ls`
+- ⬜ kinfo_enumeration, gpu_process_listing, ps_watch_unreadable and part2_close `done` in `dirtree-rdm ls`, and amendment A10's maintainer_review_c
 - ⬜ `gh pr checks <PR C>`: every job green, including both macos-latest jobs, with tests/cli_ps.rs passing there
 - ⬜ Coordinator seam review recorded: the denied PIDs kinfo_enumeration collects are the ones gpu_process_listing exposes, and the ones ps_watch_unreadable counts, with no PID counted twice or dropped
 
@@ -24,6 +24,7 @@ Every new behaviour is macOS-only by construction. Windows and Linux output stay
 graph TD
     kinfo_enumeration[Item 3: sysctl enumeration and four-outcome read]:::done
     api[Part 2 public API]:::done
+    maintainer_review_c[A10: PR C review — template change documented, Codex test skip, nits]:::amendment
     classDef done       fill:#166534,color:#bbf7d0
     classDef inprogress fill:#854d0e,color:#fef08a
     classDef planned    fill:#374151,color:#e5e7eb
@@ -36,6 +37,7 @@ graph TD
 |:-----|:-----|:-------|
 | `kinfo_enumeration.md` | 📄 Leaf Task | ✅ Done |
 | `api/` | 📁 Directory | ✅ Done |
+| `maintainer_review_c/` | 📁 Directory | 🔵 Amendment |
 
 ## Amendment Log
 | ID | Date | Source | Nodes Added | Rationale |
@@ -45,6 +47,7 @@ graph TD
 | A7 | 2026-10-07 | `__reports__/v0214_roadmap/12-amendment_a7_gpl_reviews_v0.md` | [] (gpu_process_listing revised) | Its reviews found mutants no CI test catches: a denied PID off macOS (vacuous no-GPU test), a fake unsandboxed denial, a remedy in `Display` past a word list, a truncating count; byte-for-byte `Display`, a helper test, an awk pin, stale comments |
 | A8 | 2026-10-07 | `__reports__/v0214_roadmap/13-amendment_a8_pwu_reviews_v0.md` | [] (ps_watch_unreadable revised) | Its reviews found mutants no cargo test catches: a doubled remedy on the skip line, `accept`'s branches, `explicit = false` in watch, a count without its remedy; whole-line matches, a pure `branch`, stricter gate greps, exact `--help` |
 | A9 | 2026-10-08 | `__reports__/v0214_roadmap/15-amendment_a9_slim_v0.md` | [] (the three code leaves slimmed) | Three audits against #3, R01 and the maintainer's idiom: seams and seam tests cut, `trust_kinfo_listing` kept, watch's not-followed line aligned to R01; equivalence verified (528 cells, rustdoc JSON), then folded into the leaf commits |
+| A10 | 2026-10-09 | `__reports__/v0214_roadmap/17-amendment_a10_pr_c_review_v0.md` | ["maintainer_review_c/"] | Maintainer's CHANGES_REQUESTED on PR C: the unresolved-template change documented (CHANGELOG, R01's fifth item), the `KERN_PROC_ALL` test skips under Codex, seven nits incl. `FootprintRead::Failed` and sorted `denied_pids`; fixups folded per owning commit, the 15 hash mentions repointed |
 
 ## Progress
 | Node | Branch | Commits | Notes |
